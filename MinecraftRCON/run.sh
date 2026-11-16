@@ -242,11 +242,53 @@ cd "$SERVER_DIR"
 log $YELLOW "Iniciando servidor Minecraft Bedrock..."
 screen -dmS mc bash -c "./bedrock_server | tee /share/minecraftRCON/server.log /proc/1/fd/1"
 
-sleep 10
+log $YELLOW "Aguardando o servidor Minecraft ficar pronto..."
+server_ready=false
+for attempt in {1..60}; do
+  if ! screen -ls | grep -Eq '^[[:space:]]*[0-9]+\.mc[[:space:]]+\('; then
+    log $RED "A sessão do servidor Minecraft encerrou durante a inicialização."
+    tail -n 40 "$SERVER_DIR/server.log" || true
+    exit 1
+  fi
+
+  if grep -Fq "Server started." "$SERVER_DIR/server.log"; then
+    server_ready=true
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$server_ready" != true ]]; then
+  log $RED "O servidor Minecraft não confirmou que está pronto após 60 segundos."
+  tail -n 40 "$SERVER_DIR/server.log" || true
+  exit 1
+fi
+
+log $GREEN "Servidor Minecraft pronto."
 
 log $YELLOW "Iniciando RCON personalizado..."
 python3 /rcon_server.py &
+RCON_PID=$!
 
-log $GREEN "Servidor Minecraft Bedrock e RCON online."
+rcon_ready=false
+for attempt in {1..30}; do
+  if ! kill -0 "$RCON_PID" 2>/dev/null; then
+    log $RED "O processo do RCON encerrou durante a inicialização. Verifique o token nas opções do addon."
+    exit 1
+  fi
+
+  if curl -fsS --max-time 2 "http://127.0.0.1:19133/health" >/dev/null; then
+    rcon_ready=true
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$rcon_ready" != true ]]; then
+  log $RED "O endpoint RCON não ficou pronto após 30 segundos."
+  exit 1
+fi
+
+log $GREEN "Servidor Minecraft e endpoint RCON prontos."
 
 wait

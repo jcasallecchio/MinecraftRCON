@@ -1,5 +1,10 @@
 # Histórico de versões
 
+## 1.3.6
+- Exige token Bearer de pelo menos 32 caracteres para enviar comandos RCON.
+- Envia comandos ao `screen` sem shell e valida formato, tamanho e caracteres de controle.
+- Aguarda a confirmação de inicialização do Bedrock e verifica o endpoint de saúde do RCON antes de informar que estão prontos.
+
 ## 1.3.5
 - Sincroniza os pacotes oficiais uma vez na primeira inicialização após esta atualização, mesmo que o binário do servidor já esteja na versão mais recente.
 - Mantém os pacotes oficiais incluídos no servidor recém-baixado durante as atualizações.

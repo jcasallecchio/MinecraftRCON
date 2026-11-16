@@ -9,5 +9,13 @@ _Addon running a Minecraft Bedrock Sever with RCON via stdin on Home Assistant._
 
 For configuration use the add-on configuration UI of Home Assistant.
 
+## RCON API
+
+Configure `rcon_token` in the add-on's Configuration tab. The token must have at least 32 characters and is required before the RCON service starts.
+
+Send commands to `POST http://<host>:19133/rcon` with `Content-Type: application/json`, an `Authorization: Bearer <token>` header, and a body such as `{"command":"list"}`. The endpoint accepts one command per request and limits commands to 1024 characters.
+
+The unauthenticated `GET http://<host>:19133/health` endpoint is only for readiness checks and returns whether the HTTP service is responding.
+
 [aarch64-shield]: https://img.shields.io/badge/aarch64-yes-green.svg
 [amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg
