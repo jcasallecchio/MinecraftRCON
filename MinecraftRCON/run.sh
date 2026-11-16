@@ -47,6 +47,26 @@ if ! isTrue "$EULA"; then
   exit 1
 fi
 
+# The token is optional in the Supervisor schema so upgrades can complete.
+# Refuse to start the game or expose an unauthenticated RCON endpoint when it
+# has not been configured.
+if ! python3 -c '
+import json
+import sys
+
+try:
+    with open("/data/options.json", encoding="utf-8") as options_file:
+        options = json.load(options_file)
+    token = options.get("rcon_token", "") if isinstance(options, dict) else ""
+except (OSError, json.JSONDecodeError):
+    token = ""
+
+sys.exit(0 if isinstance(token, str) and len(token.strip()) >= 32 else 1)
+'; then
+  log $RED "Token RCON ausente ou inválido. Configure rcon_token com pelo menos 32 caracteres nas opções do addon. Encerrando sem iniciar o servidor."
+  exit 1
+fi
+
 # --- Consulta a API oficial para obter versão e URL de download ---
 lookupVersion() {
   local platform="$1"

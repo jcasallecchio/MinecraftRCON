@@ -1,6 +1,6 @@
 {
   "name": "Bedrock Server with RCON",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "slug": "bedrock_server_rcon",
   "description": "Minecraft Bedrock Server with RCON via stdin for Home Assistant",
   "startup": "services",
@@ -14,6 +14,6 @@
   },
   "map": ["share:rw"],
   "schema": {
-    "rcon_token": "password(32,)"
+    "rcon_token": "password?"
   }
 }

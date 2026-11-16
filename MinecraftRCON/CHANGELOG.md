@@ -1,5 +1,9 @@
 # Histórico de versões
 
+## 1.3.7
+- Permite concluir a atualização do addon mesmo quando `rcon_token` ainda não foi configurado.
+- No boot, registra um erro claro e encerra antes de atualizar ou iniciar o servidor se o token estiver ausente ou tiver menos de 32 caracteres.
+
 ## 1.3.6
 - Exige token Bearer de pelo menos 32 caracteres para enviar comandos RCON.
 - Envia comandos ao `screen` sem shell e valida formato, tamanho e caracteres de controle.

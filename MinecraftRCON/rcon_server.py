@@ -65,7 +65,7 @@ def find_screen_session(session_name="mc"):
 def authorized():
     provided = request.headers.get("Authorization", "")
     expected = f"Bearer {RCON_TOKEN}"
-    return bool(RCON_TOKEN) and hmac.compare_digest(
+    return len(RCON_TOKEN) >= 32 and hmac.compare_digest(
         provided.encode("utf-8"), expected.encode("utf-8")
     )
 
@@ -79,8 +79,8 @@ def health():
 def rcon():
     client_ip = request.remote_addr
 
-    if not RCON_TOKEN:
-        return jsonify({"status": "error", "message": "RCON token is not configured"}), 503
+    if len(RCON_TOKEN) < 32:
+        return jsonify({"status": "error", "message": "A valid RCON token is not configured"}), 503
 
     if not authorized():
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
@@ -125,7 +125,7 @@ def rcon():
 
 
 if __name__ == "__main__":
-    if not RCON_TOKEN:
+    if len(RCON_TOKEN) < 32:
         raise SystemExit("[RCON] Configure rcon_token (at least 32 characters) in the add-on options.")
 
     print(f"[RCON] Servidor RCON iniciado na porta {RCON_PORT}")
