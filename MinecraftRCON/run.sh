@@ -46,39 +46,64 @@ if ! isTrue "$EULA"; then
   exit 1
 fi
 
-# --- Função para buscar versão e URL de download ---
-replace_version_in_url() {
-  local url="$1" new_ver="$2"
-  echo "$url" | sed -E "s/(bedrock-server-)[^/]+(\.zip)/\1${new_ver}\2/"
-}
-
+# --- Consulta a API oficial para obter versão e URL de download ---
 lookupVersion() {
   local platform="$1"
-  local customVersion="$2"
-  local download_url
+  local api_response
+  local version_info
 
-  log $YELLOW "Buscando última versão via fallback..."
-  if [[ "$platform" == "serverBedrockLinux" ]]; then
-    download_url=$(curl -fsSL "https://mc-bds-helper.vercel.app/api/latest")
-  elif [[ "$platform" == "serverBedrockPreviewLinux" ]]; then
-    download_url=$(curl -fsSL "https://mc-bds-helper.vercel.app/api/preview")
-  else
+  if [[ "$platform" != "serverBedrockLinux" && "$platform" != "serverBedrockPreviewLinux" ]]; then
     log $RED "Plataforma inválida: $platform"
     exit 2
   fi
 
-  if [[ -n "$customVersion" ]]; then
-    download_url=$(replace_version_in_url "$download_url" "$customVersion")
-  fi
-
-  if [[ $download_url =~ .*/bedrock-server-([0-9.]+)\.zip ]]; then
-    VERSION="${BASH_REMATCH[1]}"
-  else
-    log $RED "Falha ao extrair versão do URL: $download_url"
+  log $YELLOW "Consultando a API oficial do Minecraft Bedrock..."
+  if ! api_response=$(curl -fsSL "https://net-secondary.web.minecraft-services.net/api/v1.0/download/links"); then
+    log $RED "Falha ao consultar a API oficial de downloads do Minecraft."
     exit 2
   fi
 
-  DOWNLOAD_URL="$download_url"
+  if ! version_info=$(printf '%s' "$api_response" | python3 -c '
+import json
+import re
+import sys
+
+platform = sys.argv[1]
+expected_path = {
+    "serverBedrockLinux": "bin-linux",
+    "serverBedrockPreviewLinux": "bin-linux-preview",
+}.get(platform)
+
+try:
+    payload = json.load(sys.stdin)
+    link = next(
+        item for item in payload["result"]["links"]
+        if item["downloadType"] == platform
+    )
+    download_url = link["downloadUrl"]
+    pattern = (
+        rf"https://www\.minecraft\.net/bedrockdedicatedserver/"
+        rf"{re.escape(expected_path)}/bedrock-server-"
+        r"([0-9]+(?:\.[0-9]+)*)\.zip"
+    )
+    match = re.fullmatch(pattern, download_url)
+    if match is None:
+        raise ValueError("Unexpected download URL")
+    print(match.group(1) + "|" + download_url)
+except (KeyError, TypeError, StopIteration, ValueError, json.JSONDecodeError) as error:
+    print("Invalid download API response: " + str(error), file=sys.stderr)
+    sys.exit(1)
+' "$platform"); then
+    log $RED "A API retornou uma resposta inválida para a plataforma $platform."
+    exit 2
+  fi
+
+  VERSION="${version_info%%|*}"
+  DOWNLOAD_URL="${version_info#*|}"
+  if [[ -z "$VERSION" || -z "$DOWNLOAD_URL" ]]; then
+    log $RED "A API não retornou versão e URL de download válidas."
+    exit 2
+  fi
 }
 
 # --- Verifica versão instalada (se houver) ---
