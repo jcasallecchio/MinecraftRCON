@@ -1,5 +1,8 @@
 # Histórico de versões
 
+## 1.4.1
+- Corrige a busca de `backup_manager` durante a recuperação de restaurações interrompidas na inicialização.
+
 ## 1.4.0
 - Usa journal transacional com rollback para recuperar atualizações de arquivos interrompidas.
 - Monitora a sessão do Bedrock continuamente, reinicia o servidor com atraso progressivo e faz encerramento seguro do addon.

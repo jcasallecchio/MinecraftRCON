@@ -42,7 +42,7 @@ log $INTRO "=========== Iniciando Minecraft Bedrock RCON ==========="
 
 mkdir -p "$SERVER_DIR" "$BACKUP_DIR"
 
-if ! python3 -c 'from pathlib import Path; from backup_manager import recover_restore; recover_restore(Path("/share/minecraftRCON"))'; then
+if ! python3 -c 'import sys; sys.path.insert(0, "/"); from pathlib import Path; from backup_manager import recover_restore; recover_restore(Path("/share/minecraftRCON"))'; then
   log $RED "Não foi possível recuperar com segurança uma restauração interrompida. O servidor não será iniciado."
   exit 1
 fi
