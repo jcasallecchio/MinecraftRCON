@@ -1,5 +1,11 @@
 # Histórico de versões
 
+## 1.3.8
+- Inicia a versão instalada se a API oficial estiver temporariamente indisponível e tenta novamente na próxima reinicialização.
+- Baixa o ZIP para um arquivo temporário, valida integridade e caminhos, e extrai em staging antes de instalar.
+- Identifica pacotes oficiais pelo UUID do manifesto e evita copiá-los para os backups de pacotes personalizados.
+- Rotaciona os logs do RCON e esclarece que a resposta confirma somente o envio do comando à entrada do servidor.
+
 ## 1.3.7
 - Permite concluir a atualização do addon mesmo quando `rcon_token` ainda não foi configurado.
 - No boot, registra um erro claro e encerra antes de atualizar ou iniciar o servidor se o token estiver ausente ou tiver menos de 32 caracteres.

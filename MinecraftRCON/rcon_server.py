@@ -1,9 +1,10 @@
-from datetime import datetime
 import hmac
 import json
+import logging
 import os
 import re
 import subprocess
+from logging.handlers import RotatingFileHandler
 
 from flask import Flask, jsonify, request
 from waitress import serve
@@ -15,6 +16,22 @@ LOG_FILE = "/share/minecraftRCON/rcon_commands.log"
 OPTIONS_FILE = "/data/options.json"
 RCON_PORT = 19133
 MAX_COMMAND_LENGTH = 1024
+LOG_MAX_BYTES = 2 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
+
+command_logger = logging.getLogger("rcon_commands")
+command_logger.setLevel(logging.INFO)
+command_logger.propagate = False
+command_log_handler = RotatingFileHandler(
+    LOG_FILE,
+    maxBytes=LOG_MAX_BYTES,
+    backupCount=LOG_BACKUP_COUNT,
+    encoding="utf-8",
+)
+command_log_handler.setFormatter(
+    logging.Formatter("[%(asctime)s] IP: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+)
+command_logger.addHandler(command_log_handler)
 
 
 def load_rcon_token():
@@ -35,10 +52,7 @@ RCON_TOKEN = load_rcon_token()
 
 
 def log_command(ip, command, status):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_line = f"[{timestamp}] IP: {ip or 'unknown'} | CMD: {command} | STATUS: {status}\n"
-    with open(LOG_FILE, "a", encoding="utf-8") as log_file:
-        log_file.write(log_line)
+    command_logger.info("%s | CMD: %s | STATUS: %s", ip or "unknown", command, status)
 
 
 def find_screen_session(session_name="mc"):
@@ -120,8 +134,14 @@ def rcon():
         log_command(client_ip, cmd, "ERROR: Failed to send command to screen")
         return jsonify({"status": "error", "message": "Failed to send command to Minecraft"}), 503
 
-    log_command(client_ip, cmd, "SENT")
-    return jsonify({"status": "ok", "message": "Command sent to Minecraft"})
+    log_command(client_ip, cmd, "SENT_TO_SERVER_SESSION")
+    return jsonify({
+        "status": "ok",
+        "message": (
+            "Command sent to the Minecraft server session. "
+            "This confirms delivery to the server input only; it does not confirm execution."
+        ),
+    })
 
 
 if __name__ == "__main__":

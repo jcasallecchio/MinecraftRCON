@@ -79,9 +79,9 @@ lookupVersion() {
   fi
 
   log $YELLOW "Consultando a API oficial do Minecraft Bedrock..."
-  if ! api_response=$(curl -fsSL "https://net-secondary.web.minecraft-services.net/api/v1.0/download/links"); then
+  if ! api_response=$(curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused "https://net-secondary.web.minecraft-services.net/api/v1.0/download/links"); then
     log $RED "Falha ao consultar a API oficial de downloads do Minecraft."
-    exit 2
+    return 1
   fi
 
   if ! version_info=$(printf '%s' "$api_response" | python3 -c '
@@ -116,14 +116,14 @@ except (KeyError, TypeError, StopIteration, ValueError, json.JSONDecodeError) as
     sys.exit(1)
 ' "$platform"); then
     log $RED "A API retornou uma resposta inválida para a plataforma $platform."
-    exit 2
+    return 1
   fi
 
   VERSION="${version_info%%|*}"
   DOWNLOAD_URL="${version_info#*|}"
   if [[ -z "$VERSION" || -z "$DOWNLOAD_URL" ]]; then
     log $RED "A API não retornou versão e URL de download válidas."
-    exit 2
+    return 1
   fi
 }
 
@@ -137,24 +137,67 @@ if [[ -f "$PACKS_VERSION_FILE" ]]; then
   INSTALLED_PACKS_VERSION=$(<"$PACKS_VERSION_FILE")
 fi
 
-# --- Busca última versão disponível online ---
-lookupVersion serverBedrockLinux
-log $GREEN "Versão disponível online: $VERSION"
+# --- Busca última versão disponível online; mantém a instalada em caso de falha ---
+API_AVAILABLE=true
+if ! lookupVersion serverBedrockLinux; then
+  API_AVAILABLE=false
+  if [[ -f "$SERVER_BIN" ]]; then
+    VERSION="$INSTALLED_VERSION"
+    log $YELLOW "Não foi possível consultar a versão online. Iniciando a versão instalada ${VERSION:-desconhecida}; uma nova tentativa ocorrerá na próxima reinicialização."
+  else
+    log $RED "Não foi possível consultar a API e não há servidor instalado para iniciar."
+    exit 2
+  fi
+else
+  log $GREEN "Versão disponível online: $VERSION"
+fi
 log $GREEN "Versão instalada localmente: ${INSTALLED_VERSION:-nenhuma}"
 log $GREEN "Versão dos pacotes oficiais sincronizada: ${INSTALLED_PACKS_VERSION:-nenhuma}"
 
 # --- Decide se precisa atualizar ---
-NEED_UPDATE=true
-if [[ "$VERSION" == "$INSTALLED_VERSION" ]] && [[ -f "$SERVER_BIN" ]] && [[ "$VERSION" == "$INSTALLED_PACKS_VERSION" ]]; then
-  log $GREEN "Servidor já está na última versão, não será atualizado!"
-  NEED_UPDATE=false
-else
-  log $YELLOW "Servidor ou pacotes oficiais precisam ser sincronizados com a versão $VERSION, atualizando..."
-  log $GREEN "URL para download: $DOWNLOAD_URL"
+NEED_UPDATE=false
+if [[ "$API_AVAILABLE" == true ]]; then
+  NEED_UPDATE=true
+  if [[ "$VERSION" == "$INSTALLED_VERSION" ]] && [[ -f "$SERVER_BIN" ]] && [[ "$VERSION" == "$INSTALLED_PACKS_VERSION" ]]; then
+    log $GREEN "Servidor já está na última versão, não será atualizado!"
+    NEED_UPDATE=false
+  else
+    log $YELLOW "Servidor ou pacotes oficiais precisam ser sincronizados com a versão $VERSION, atualizando..."
+    log $GREEN "URL para download: $DOWNLOAD_URL"
+  fi
 fi
 
 # --- Backup e restauração ---
 BACKUP_TARGET=""
+
+pack_is_official() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+candidate = Path(sys.argv[1]) / "manifest.json"
+official_root = Path(sys.argv[2])
+
+def header_uuid(manifest_path):
+    try:
+        with manifest_path.open(encoding="utf-8") as manifest_file:
+            payload = json.load(manifest_file)
+        value = payload.get("header", {}).get("uuid")
+        return value.lower() if isinstance(value, str) else None
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+
+candidate_uuid = header_uuid(candidate)
+if not candidate_uuid:
+    raise SystemExit(1)
+
+for manifest_path in official_root.glob("*/manifest.json"):
+    if header_uuid(manifest_path) == candidate_uuid:
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
 
 do_backup() {
   local timestamp
@@ -164,11 +207,26 @@ do_backup() {
   log $YELLOW "Criando backup seletivo em $BACKUP_TARGET..."
   mkdir -p "$BACKUP_TARGET"
 
-  for item in worlds behavior_packs resource_packs structures server.properties permissions.json allowlist.json; do
+  for item in worlds structures server.properties permissions.json allowlist.json; do
     if [[ -e "$SERVER_DIR/$item" ]]; then
       log $YELLOW "Salvando $item..."
       cp -r "$SERVER_DIR/$item" "$BACKUP_TARGET/"
     fi
+  done
+
+  for item in behavior_packs resource_packs; do
+    local source_dir="$SERVER_DIR/$item"
+    [[ -d "$source_dir" ]] || continue
+    while IFS= read -r -d '' pack_source; do
+      local pack_name="${pack_source##*/}"
+      if pack_is_official "$pack_source" "$STAGING_DIR/$item"; then
+        log $YELLOW "Não copiando pacote oficial para o backup: $item/$pack_name"
+        continue
+      fi
+      log $YELLOW "Salvando pacote personalizado: $item/$pack_name"
+      mkdir -p "$BACKUP_TARGET/$item"
+      cp -r "$pack_source" "$BACKUP_TARGET/$item/"
+    done < <(find "$source_dir" -mindepth 1 -maxdepth 1 -type d -print0)
   done
 
   log $YELLOW "Removendo backups antigos, mantendo os $PACKAGE_BACKUP_KEEP mais recentes..."
@@ -190,13 +248,10 @@ restore_custom_packs() {
     while IFS= read -r -d '' pack_source; do
       pack_name="${pack_source##*/}"
 
-      # Never restore old copies of packs bundled by the official server.
-      case "$pack_name" in
-        vanilla|vanilla_*|chemistry|chemistry_*|editor|editor_*|experimental|experimental_*|experimental-*)
-          log $YELLOW "Mantendo pacote oficial da nova versão: $item/$pack_name"
-          continue
-          ;;
-      esac
+      if pack_is_official "$pack_source" "$STAGING_DIR/$item"; then
+        log $YELLOW "Ignorando cópia antiga de pacote oficial (manifesto): $item/$pack_name"
+        continue
+      fi
 
       if [[ ! -e "$target_dir/$pack_name" ]]; then
         log $YELLOW "Restaurando pacote personalizado: $item/$pack_name"
@@ -210,29 +265,52 @@ restore_custom_packs() {
 
 # --- Executa atualização se necessário ---
 if $NEED_UPDATE; then
+  TMP_ZIP="$SERVER_DIR/.server-$VERSION-$$.zip.part"
+  STAGING_DIR="$SERVER_DIR/.server-$VERSION-$$.staging"
+  trap 'rm -f "${TMP_ZIP:-}"; rm -rf "${STAGING_DIR:-}"' EXIT
+  log $YELLOW "Baixando servidor Bedrock versão $VERSION..."
+  if ! curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused -o "$TMP_ZIP" -A "itzg/minecraft-bedrock-server" "$DOWNLOAD_URL"; then
+    log $RED "Falha no download da versão $VERSION; a instalação atual foi preservada."
+    exit 1
+  fi
+  if ! unzip -tq "$TMP_ZIP" >/dev/null; then
+    log $RED "O ZIP baixado está incompleto ou inválido; a instalação atual foi preservada."
+    exit 1
+  fi
+  if ! python3 - "$TMP_ZIP" <<'PY'
+import sys
+import zipfile
+
+archive_path = sys.argv[1]
+try:
+    with zipfile.ZipFile(archive_path) as archive:
+        names = archive.namelist()
+        if "bedrock_server" not in names:
+            raise ValueError("bedrock_server is missing from archive root")
+        for name in names:
+            if name.startswith("/") or ".." in name.split("/"):
+                raise ValueError("unsafe archive path")
+except (OSError, zipfile.BadZipFile, ValueError) as error:
+    print(f"Invalid Bedrock server archive: {error}", file=sys.stderr)
+    sys.exit(1)
+PY
+  then
+    log $RED "O ZIP não contém uma distribuição Bedrock segura e completa; a instalação atual foi preservada."
+    exit 1
+  fi
+
+  mkdir -p "$STAGING_DIR"
+  if ! unzip -q "$TMP_ZIP" -d "$STAGING_DIR" || [[ ! -s "$STAGING_DIR/bedrock_server" ]]; then
+    log $RED "Não foi possível extrair e validar bedrock_server; a instalação atual foi preservada."
+    exit 1
+  fi
+
   do_backup
 
-  TMP_ZIP="$SERVER_DIR/server.zip"
-  log $YELLOW "Baixando servidor Bedrock versão $VERSION..."
-  curl -fsSL -o "$TMP_ZIP" -A "itzg/minecraft-bedrock-server" "$DOWNLOAD_URL"
-
-  total=$(unzip -l "$TMP_ZIP" | grep -E '^[ ]+[0-9]' | wc -l)
-  log $YELLOW "Extraindo arquivos... Total: $total"
-
-  count=0
-  last_percent=0
-  unzip -o "$TMP_ZIP" -d "$SERVER_DIR" | while read -r line; do
-    if echo "$line" | grep -q "inflating:"; then
-      count=$((count + 1))
-      percent=$((count * 100 / total))
-      if [ "$percent" -ne "$last_percent" ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extraindo arquivos... $percent%"
-        last_percent=$percent
-      fi
-    fi
-  done
-
   log $YELLOW "Extração concluída em ${SECONDS}s! Restaurando dados e pacotes personalizados..."
+
+  # Promote files only after the complete archive and binary were validated.
+  cp -a "$STAGING_DIR/." "$SERVER_DIR/"
 
   # Restore world data and settings, but keep the official content packs
   # extracted from the new server archive.
@@ -246,12 +324,18 @@ if $NEED_UPDATE; then
 
   restore_custom_packs
 
-  log $YELLOW "Removendo $TMP_ZIP"
+  if [[ ! -s "$SERVER_BIN" ]]; then
+    log $RED "O binário do servidor não foi instalado corretamente."
+    exit 1
+  fi
   chmod +x "$SERVER_BIN"
-  rm "$TMP_ZIP"
 
   echo "$VERSION" > "$LAST_VERSION_FILE"
   echo "$VERSION" > "$PACKS_VERSION_FILE"
+
+  rm -f "$TMP_ZIP"
+  rm -rf "$STAGING_DIR"
+  trap - EXIT
 
   log $GREEN "Atualização concluída para a versão $VERSION."
 fi
