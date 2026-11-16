@@ -1,5 +1,9 @@
 # Histórico de versões
 
+## 1.3.9
+- Inicia a versão instalada quando o download, a validação ou a extração do pacote de atualização falhar; tenta novamente na próxima reinicialização.
+- Garante `transport=nethernet` no `server.properties` antes de iniciar o Bedrock.
+
 ## 1.3.8
 - Inicia a versão instalada se a API oficial estiver temporariamente indisponível e tenta novamente na próxima reinicialização.
 - Baixa o ZIP para um arquivo temporário, valida integridade e caminhos, e extrai em staging antes de instalar.

@@ -141,7 +141,7 @@ fi
 API_AVAILABLE=true
 if ! lookupVersion serverBedrockLinux; then
   API_AVAILABLE=false
-  if [[ -f "$SERVER_BIN" ]]; then
+  if [[ -s "$SERVER_BIN" ]]; then
     VERSION="$INSTALLED_VERSION"
     log $YELLOW "Não foi possível consultar a versão online. Iniciando a versão instalada ${VERSION:-desconhecida}; uma nova tentativa ocorrerá na próxima reinicialização."
   else
@@ -158,7 +158,7 @@ log $GREEN "Versão dos pacotes oficiais sincronizada: ${INSTALLED_PACKS_VERSION
 NEED_UPDATE=false
 if [[ "$API_AVAILABLE" == true ]]; then
   NEED_UPDATE=true
-  if [[ "$VERSION" == "$INSTALLED_VERSION" ]] && [[ -f "$SERVER_BIN" ]] && [[ "$VERSION" == "$INSTALLED_PACKS_VERSION" ]]; then
+  if [[ "$VERSION" == "$INSTALLED_VERSION" ]] && [[ -s "$SERVER_BIN" ]] && [[ "$VERSION" == "$INSTALLED_PACKS_VERSION" ]]; then
     log $GREEN "Servidor já está na última versão, não será atualizado!"
     NEED_UPDATE=false
   else
@@ -268,16 +268,15 @@ if $NEED_UPDATE; then
   TMP_ZIP="$SERVER_DIR/.server-$VERSION-$$.zip.part"
   STAGING_DIR="$SERVER_DIR/.server-$VERSION-$$.staging"
   trap 'rm -f "${TMP_ZIP:-}"; rm -rf "${STAGING_DIR:-}"' EXIT
+  UPDATE_ARTIFACTS_VALID=true
   log $YELLOW "Baixando servidor Bedrock versão $VERSION..."
   if ! curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused -o "$TMP_ZIP" -A "itzg/minecraft-bedrock-server" "$DOWNLOAD_URL"; then
-    log $RED "Falha no download da versão $VERSION; a instalação atual foi preservada."
-    exit 1
-  fi
-  if ! unzip -tq "$TMP_ZIP" >/dev/null; then
-    log $RED "O ZIP baixado está incompleto ou inválido; a instalação atual foi preservada."
-    exit 1
-  fi
-  if ! python3 - "$TMP_ZIP" <<'PY'
+    log $RED "Falha no download da versão $VERSION."
+    UPDATE_ARTIFACTS_VALID=false
+  elif ! unzip -tq "$TMP_ZIP" >/dev/null; then
+    log $RED "O ZIP baixado está incompleto ou inválido."
+    UPDATE_ARTIFACTS_VALID=false
+  elif ! python3 - "$TMP_ZIP" <<'PY'
 import sys
 import zipfile
 
@@ -295,52 +294,114 @@ except (OSError, zipfile.BadZipFile, ValueError) as error:
     sys.exit(1)
 PY
   then
-    log $RED "O ZIP não contém uma distribuição Bedrock segura e completa; a instalação atual foi preservada."
-    exit 1
+    log $RED "O ZIP não contém uma distribuição Bedrock segura e completa."
+    UPDATE_ARTIFACTS_VALID=false
   fi
 
-  mkdir -p "$STAGING_DIR"
-  if ! unzip -q "$TMP_ZIP" -d "$STAGING_DIR" || [[ ! -s "$STAGING_DIR/bedrock_server" ]]; then
-    log $RED "Não foi possível extrair e validar bedrock_server; a instalação atual foi preservada."
-    exit 1
-  fi
-
-  do_backup
-
-  log $YELLOW "Extração concluída em ${SECONDS}s! Restaurando dados e pacotes personalizados..."
-
-  # Promote files only after the complete archive and binary were validated.
-  cp -a "$STAGING_DIR/." "$SERVER_DIR/"
-
-  # Restore world data and settings, but keep the official content packs
-  # extracted from the new server archive.
-  for item in worlds structures server.properties permissions.json allowlist.json; do
-    if [[ -e "$BACKUP_TARGET/$item" ]]; then
-      log $YELLOW "Restaurando $item..."
-      rm -rf "$SERVER_DIR/$item"
-      cp -r "$BACKUP_TARGET/$item" "$SERVER_DIR/"
+  if [[ "$UPDATE_ARTIFACTS_VALID" == true ]]; then
+    if ! mkdir -p "$STAGING_DIR" || ! unzip -q "$TMP_ZIP" -d "$STAGING_DIR" || [[ ! -s "$STAGING_DIR/bedrock_server" ]]; then
+      log $RED "Não foi possível extrair e validar bedrock_server."
+      UPDATE_ARTIFACTS_VALID=false
     fi
-  done
-
-  restore_custom_packs
-
-  if [[ ! -s "$SERVER_BIN" ]]; then
-    log $RED "O binário do servidor não foi instalado corretamente."
-    exit 1
   fi
-  chmod +x "$SERVER_BIN"
 
-  echo "$VERSION" > "$LAST_VERSION_FILE"
-  echo "$VERSION" > "$PACKS_VERSION_FILE"
+  if [[ "$UPDATE_ARTIFACTS_VALID" != true ]]; then
+    rm -f "$TMP_ZIP"
+    rm -rf "$STAGING_DIR"
+    trap - EXIT
+    if [[ -s "$SERVER_BIN" ]]; then
+      NEED_UPDATE=false
+      VERSION="$INSTALLED_VERSION"
+      log $YELLOW "A atualização não foi concluída. Iniciando a versão instalada ${VERSION:-desconhecida}; uma nova tentativa ocorrerá na próxima reinicialização."
+    else
+      log $RED "A atualização falhou e não há um binário instalado válido para iniciar."
+      exit 1
+    fi
+  fi
 
-  rm -f "$TMP_ZIP"
-  rm -rf "$STAGING_DIR"
-  trap - EXIT
+  if $NEED_UPDATE; then
+    do_backup
 
-  log $GREEN "Atualização concluída para a versão $VERSION."
+    log $YELLOW "Extração concluída em ${SECONDS}s! Restaurando dados e pacotes personalizados..."
+
+    # Promote files only after the complete archive and binary were validated.
+    cp -a "$STAGING_DIR/." "$SERVER_DIR/"
+
+    # Restore world data and settings, but keep the official content packs
+    # extracted from the new server archive.
+    for item in worlds structures server.properties permissions.json allowlist.json; do
+      if [[ -e "$BACKUP_TARGET/$item" ]]; then
+        log $YELLOW "Restaurando $item..."
+        rm -rf "$SERVER_DIR/$item"
+        cp -r "$BACKUP_TARGET/$item" "$SERVER_DIR/"
+      fi
+    done
+
+    restore_custom_packs
+
+    if [[ ! -s "$SERVER_BIN" ]]; then
+      log $RED "O binário do servidor não foi instalado corretamente."
+      exit 1
+    fi
+    chmod +x "$SERVER_BIN"
+
+    echo "$VERSION" > "$LAST_VERSION_FILE"
+    echo "$VERSION" > "$PACKS_VERSION_FILE"
+
+    rm -f "$TMP_ZIP"
+    rm -rf "$STAGING_DIR"
+    trap - EXIT
+
+    log $GREEN "Atualização concluída para a versão $VERSION."
+  fi
 fi
 
 # --- Inicia servidor ---
+transport_result=$(python3 - "$SERVER_DIR/server.properties" <<'PY'
+import os
+import stat
+import sys
+from pathlib import Path
+
+properties_path = Path(sys.argv[1])
+try:
+    exists = properties_path.exists()
+    original = properties_path.read_bytes() if exists else b""
+    newline = b"\r\n" if b"\r\n" in original else b"\n"
+    lines = original.splitlines()
+    updated = []
+    found = False
+    changed = not exists
+
+    for line in lines:
+        if line.split(b"=", 1)[0].strip().lower() == b"transport":
+            if not found:
+                found = True
+                replacement = b"transport=nethernet"
+                updated.append(replacement)
+                changed = changed or line.strip() != replacement
+            else:
+                changed = True
+            continue
+        updated.append(line)
+
+    if not found:
+        updated.append(b"transport=nethernet")
+        changed = True
+
+    content = newline.join(updated) + newline
+    temp_path = properties_path.with_name(properties_path.name + ".tmp")
+    temp_path.write_bytes(content)
+    if exists:
+        os.chmod(temp_path, stat.S_IMODE(properties_path.stat().st_mode))
+    os.replace(temp_path, properties_path)
+    print("transport=nethernet adicionado/atualizado" if changed else "transport=nethernet já estava configurado")
+except OSError as error:
+    print(f"Não foi possível configurar transport=nethernet: {error}", file=sys.stderr)
+    sys.exit(1)
+PY
+) || { log $RED "Falha ao garantir o transporte NetherNet no server.properties."; exit 1; }
+log $YELLOW "$transport_result"
 cd "$SERVER_DIR"
 
 log $YELLOW "Iniciando servidor Minecraft Bedrock..."
