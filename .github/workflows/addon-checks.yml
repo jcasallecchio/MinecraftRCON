@@ -1,0 +1,29 @@
+name: Add-on checks
+
+on:
+  push:
+    paths:
+      - "MinecraftRCON/**"
+      - ".github/workflows/addon-checks.yml"
+  pull_request:
+    paths:
+      - "MinecraftRCON/**"
+      - ".github/workflows/addon-checks.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install pinned dependencies
+        run: python -m pip install -r MinecraftRCON/requirements.txt
+      - name: Run unit tests
+        run: python -m unittest discover -s MinecraftRCON/tests -v
+      - name: Check shell syntax
+        run: bash -n MinecraftRCON/run.sh
+      - name: Compile Python sources
+        run: python -m py_compile MinecraftRCON/*.py MinecraftRCON/tests/*.py

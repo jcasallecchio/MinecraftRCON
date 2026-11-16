@@ -1,5 +1,13 @@
 # Histórico de versões
 
+## 1.4.0
+- Usa journal transacional com rollback para recuperar atualizações de arquivos interrompidas.
+- Monitora a sessão do Bedrock continuamente, reinicia o servidor com atraso progressivo e faz encerramento seguro do addon.
+- Retorna linhas recentes do console como resultado best-effort, com identificador de requisição e sem alegar confirmação de execução.
+- Adiciona allowlist opcional de IP/CIDR e limites de frequência à API RCON.
+- Cria backups programados e manuais do mundo, com retenção configurável e restauração autenticada com confirmação explícita.
+- Adiciona testes automatizados e fixa as dependências Python.
+
 ## 1.3.9
 - Inicia a versão instalada quando o download, a validação ou a extração do pacote de atualização falhar; tenta novamente na próxima reinicialização.
 - Garante `transport=nethernet` no `server.properties` antes de iniciar o Bedrock.

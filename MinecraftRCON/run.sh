@@ -42,6 +42,15 @@ log $INTRO "=========== Iniciando Minecraft Bedrock RCON ==========="
 
 mkdir -p "$SERVER_DIR" "$BACKUP_DIR"
 
+if ! python3 -c 'from pathlib import Path; from backup_manager import recover_restore; recover_restore(Path("/share/minecraftRCON"))'; then
+  log $RED "Não foi possível recuperar com segurança uma restauração interrompida. O servidor não será iniciado."
+  exit 1
+fi
+if ! python3 /update_transaction.py recover --server-dir "$SERVER_DIR"; then
+  log $RED "Não foi possível recuperar com segurança uma atualização interrompida. O servidor não será iniciado."
+  exit 1
+fi
+
 if ! isTrue "$EULA"; then
   log $RED "EULA não aceita. Configure EULA=true para continuar."
   exit 1
@@ -233,14 +242,14 @@ do_backup() {
   find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" | sort -r | tail -n +$((PACKAGE_BACKUP_KEEP + 1)) | xargs -r rm -rf
 }
 
-restore_custom_packs() {
-  local item backup_dir pack_source target_dir pack_name
+stage_custom_packs() {
+  local item backup_dir pack_source target_dir pack_name pack_temp
 
-  # Keep the packs shipped with the freshly downloaded server. Restore custom
-  # packs only when the new distribution does not provide that directory.
+  # Keep the packs shipped with the new server. Add custom packs to staging
+  # so they are covered by the same rollback transaction as the server files.
   for item in behavior_packs resource_packs; do
     backup_dir="$BACKUP_TARGET/$item"
-    target_dir="$SERVER_DIR/$item"
+    target_dir="$STAGING_DIR/$item"
 
     [[ -d "$backup_dir" ]] || continue
     mkdir -p "$target_dir"
@@ -254,12 +263,25 @@ restore_custom_packs() {
       fi
 
       if [[ ! -e "$target_dir/$pack_name" ]]; then
-        log $YELLOW "Restaurando pacote personalizado: $item/$pack_name"
-        cp -r "$pack_source" "$target_dir/"
+        log $YELLOW "Preparando pacote personalizado no staging: $item/$pack_name"
+        pack_temp="$target_dir/.restore-${pack_name}-$$"
+        rm -rf "$pack_temp"
+        cp -r "$pack_source" "$pack_temp"
+        mv "$pack_temp" "$target_dir/$pack_name"
       else
         log $YELLOW "Mantendo pacote já fornecido pela nova versão: $item/$pack_name"
       fi
     done < <(find "$backup_dir" -mindepth 1 -maxdepth 1 -type d -print0)
+  done
+}
+
+preserve_existing_user_data() {
+  local item
+  for item in worlds structures server.properties permissions.json allowlist.json; do
+    if [[ -e "$SERVER_DIR/$item" && -e "$STAGING_DIR/$item" ]]; then
+      log $YELLOW "Preservando dados existentes: $item"
+      rm -rf "$STAGING_DIR/$item"
+    fi
   done
 }
 
@@ -305,6 +327,10 @@ PY
     fi
   fi
 
+  if [[ "$UPDATE_ARTIFACTS_VALID" == true ]]; then
+    preserve_existing_user_data
+  fi
+
   if [[ "$UPDATE_ARTIFACTS_VALID" != true ]]; then
     rm -f "$TMP_ZIP"
     rm -rf "$STAGING_DIR"
@@ -321,38 +347,54 @@ PY
 
   if $NEED_UPDATE; then
     do_backup
+    stage_custom_packs
 
-    log $YELLOW "Extração concluída em ${SECONDS}s! Restaurando dados e pacotes personalizados..."
+    log $YELLOW "Extração concluída em ${SECONDS}s! Preparando dados e pacotes personalizados..."
 
-    # Promote files only after the complete archive and binary were validated.
-    cp -a "$STAGING_DIR/." "$SERVER_DIR/"
-
-    # Restore world data and settings, but keep the official content packs
-    # extracted from the new server archive.
-    for item in worlds structures server.properties permissions.json allowlist.json; do
-      if [[ -e "$BACKUP_TARGET/$item" ]]; then
-        log $YELLOW "Restaurando $item..."
-        rm -rf "$SERVER_DIR/$item"
-        cp -r "$BACKUP_TARGET/$item" "$SERVER_DIR/"
+    # Replace files with rollback protection so a power loss cannot leave a
+    # mixed installation. User worlds and settings were excluded from staging.
+    if python3 /update_transaction.py apply --server-dir "$SERVER_DIR" --staging-dir "$STAGING_DIR"; then
+      UPDATE_APPLIED=true
+    else
+      APPLY_STATUS=$?
+      if [[ "$APPLY_STATUS" -eq 20 ]]; then
+        log $RED "A atualização falhou e o rollback também não pôde ser confirmado; o add-on não iniciará o servidor."
+        exit 1
       fi
-    done
-
-    restore_custom_packs
-
-    if [[ ! -s "$SERVER_BIN" ]]; then
-      log $RED "O binário do servidor não foi instalado corretamente."
-      exit 1
+      if [[ -s "$SERVER_BIN" ]]; then
+        NEED_UPDATE=false
+        UPDATE_APPLIED=false
+        VERSION="$INSTALLED_VERSION"
+        rm -f "$TMP_ZIP"
+        rm -rf "$STAGING_DIR"
+        trap - EXIT
+        log $YELLOW "Falha ao instalar a atualização. A versão anterior foi restaurada e será iniciada."
+      else
+        log $RED "A instalação falhou e não há uma versão anterior válida para iniciar."
+        exit 1
+      fi
     fi
-    chmod +x "$SERVER_BIN"
 
-    echo "$VERSION" > "$LAST_VERSION_FILE"
-    echo "$VERSION" > "$PACKS_VERSION_FILE"
+    if [[ "$UPDATE_APPLIED" == true ]]; then
+      if [[ ! -s "$SERVER_BIN" ]]; then
+        log $RED "O binário do servidor não foi instalado corretamente."
+        exit 1
+      fi
+      chmod +x "$SERVER_BIN"
 
-    rm -f "$TMP_ZIP"
-    rm -rf "$STAGING_DIR"
-    trap - EXIT
+      if ! python3 /update_transaction.py commit --server-dir "$SERVER_DIR"; then
+        log $RED "Não foi possível confirmar a instalação; o rollback será recuperado no próximo boot."
+        exit 1
+      fi
+      echo "$VERSION" > "$LAST_VERSION_FILE"
+      echo "$VERSION" > "$PACKS_VERSION_FILE"
 
-    log $GREEN "Atualização concluída para a versão $VERSION."
+      rm -f "$TMP_ZIP"
+      rm -rf "$STAGING_DIR"
+      trap - EXIT
+
+      log $GREEN "Atualização concluída para a versão $VERSION."
+    fi
   fi
 fi
 
@@ -404,32 +446,53 @@ PY
 log $YELLOW "$transport_result"
 cd "$SERVER_DIR"
 
-log $YELLOW "Iniciando servidor Minecraft Bedrock..."
-screen -dmS mc bash -c "./bedrock_server | tee /share/minecraftRCON/server.log /proc/1/fd/1"
+server_session_exists() {
+  screen -ls | grep -Eq '^[[:space:]]*[0-9]+\.mc[[:space:]]+\('
+}
 
-log $YELLOW "Aguardando o servidor Minecraft ficar pronto..."
-server_ready=false
-for attempt in {1..60}; do
-  if ! screen -ls | grep -Eq '^[[:space:]]*[0-9]+\.mc[[:space:]]+\('; then
-    log $RED "A sessão do servidor Minecraft encerrou durante a inicialização."
+rotate_server_log() {
+  local size_bytes
+  [[ -f "$SERVER_DIR/server.log" ]] || return 0
+  size_bytes=$(wc -c < "$SERVER_DIR/server.log")
+  (( size_bytes < 20971520 )) && return 0
+  rm -f "$SERVER_DIR/server.log.3"
+  [[ ! -f "$SERVER_DIR/server.log.2" ]] || mv "$SERVER_DIR/server.log.2" "$SERVER_DIR/server.log.3"
+  [[ ! -f "$SERVER_DIR/server.log.1" ]] || mv "$SERVER_DIR/server.log.1" "$SERVER_DIR/server.log.2"
+  mv "$SERVER_DIR/server.log" "$SERVER_DIR/server.log.1"
+}
+
+start_and_wait_server() {
+  local old_line_count attempt server_ready=false
+  rotate_server_log
+  old_line_count=$(wc -l < "$SERVER_DIR/server.log" 2>/dev/null || printf '0')
+  log $YELLOW "Iniciando servidor Minecraft Bedrock..."
+  screen -dmS mc bash -c "./bedrock_server | tee -a /share/minecraftRCON/server.log /proc/1/fd/1"
+
+  log $YELLOW "Aguardando o servidor Minecraft ficar pronto..."
+  for attempt in {1..60}; do
+    if ! server_session_exists; then
+      log $RED "A sessão do servidor Minecraft encerrou durante a inicialização."
+      tail -n 40 "$SERVER_DIR/server.log" || true
+      return 1
+    fi
+    if tail -n +$((old_line_count + 1)) "$SERVER_DIR/server.log" | grep -Fq "Server started."; then
+      server_ready=true
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ "$server_ready" != true ]]; then
+    log $RED "O servidor Minecraft não confirmou que está pronto após 60 segundos."
     tail -n 40 "$SERVER_DIR/server.log" || true
-    exit 1
+    return 1
   fi
+  log $GREEN "Servidor Minecraft pronto."
+}
 
-  if grep -Fq "Server started." "$SERVER_DIR/server.log"; then
-    server_ready=true
-    break
-  fi
-  sleep 1
-done
-
-if [[ "$server_ready" != true ]]; then
-  log $RED "O servidor Minecraft não confirmou que está pronto após 60 segundos."
-  tail -n 40 "$SERVER_DIR/server.log" || true
+if ! start_and_wait_server; then
   exit 1
 fi
-
-log $GREEN "Servidor Minecraft pronto."
 
 log $YELLOW "Iniciando RCON personalizado..."
 python3 /rcon_server.py &
@@ -456,4 +519,50 @@ fi
 
 log $GREEN "Servidor Minecraft e endpoint RCON prontos."
 
-wait
+stop_server_gracefully() {
+  local session_id attempt
+  session_id=$(screen -ls | sed -n 's/^[[:space:]]*\([0-9]*\.mc\)[[:space:]].*/\1/p' | head -n 1)
+  [[ -n "$session_id" ]] || return 0
+  log $YELLOW "Solicitando encerramento seguro do servidor Bedrock..."
+  screen -S "$session_id" -X stuff $'stop\r' || true
+  for attempt in {1..60}; do
+    server_session_exists || break
+    sleep 1
+  done
+}
+
+shutdown_addon() {
+  stop_server_gracefully
+  kill -TERM "$RCON_PID" 2>/dev/null || true
+}
+trap shutdown_addon TERM INT
+
+restart_delay=5
+last_server_started=$SECONDS
+while kill -0 "$RCON_PID" 2>/dev/null; do
+  if [[ -e "$SERVER_DIR/.maintenance" ]]; then
+    sleep 1
+    continue
+  fi
+  if ! server_session_exists; then
+    if (( SECONDS - last_server_started >= 300 )); then
+      restart_delay=5
+    fi
+    log $RED "A sessão do Bedrock parou após a inicialização. Tentarei reiniciá-la em ${restart_delay}s."
+    next_restart_delay=$restart_delay
+    restart_delay=$((restart_delay * 2))
+    (( restart_delay > 60 )) && restart_delay=60
+    sleep "$next_restart_delay"
+    if [[ -e "$SERVER_DIR/.maintenance" ]]; then
+      continue
+    fi
+    if start_and_wait_server; then
+      last_server_started=$SECONDS
+      log $GREEN "Servidor Bedrock recuperado pelo watchdog."
+    fi
+  fi
+  sleep 2
+done
+
+log $RED "O processo RCON encerrou. Encerrando o addon para permitir recuperação pelo Supervisor."
+exit 1
