@@ -149,6 +149,39 @@ do_backup() {
   find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" | sort -r | tail -n +$((PACKAGE_BACKUP_KEEP + 1)) | xargs -r rm -rf
 }
 
+restore_custom_packs() {
+  local item backup_dir pack_source target_dir pack_name
+
+  # Keep the packs shipped with the freshly downloaded server. Restore custom
+  # packs only when the new distribution does not provide that directory.
+  for item in behavior_packs resource_packs; do
+    backup_dir="$BACKUP_TARGET/$item"
+    target_dir="$SERVER_DIR/$item"
+
+    [[ -d "$backup_dir" ]] || continue
+    mkdir -p "$target_dir"
+
+    while IFS= read -r -d '' pack_source; do
+      pack_name="${pack_source##*/}"
+
+      # Never restore old copies of packs bundled by the official server.
+      case "$pack_name" in
+        vanilla|vanilla_*|chemistry|chemistry_*|editor|editor_*|experimental|experimental_*|experimental-*)
+          log $YELLOW "Mantendo pacote oficial da nova versão: $item/$pack_name"
+          continue
+          ;;
+      esac
+
+      if [[ ! -e "$target_dir/$pack_name" ]]; then
+        log $YELLOW "Restaurando pacote personalizado: $item/$pack_name"
+        cp -r "$pack_source" "$target_dir/"
+      else
+        log $YELLOW "Mantendo pacote já fornecido pela nova versão: $item/$pack_name"
+      fi
+    done < <(find "$backup_dir" -mindepth 1 -maxdepth 1 -type d -print0)
+  done
+}
+
 # --- Executa atualização se necessário ---
 if $NEED_UPDATE; then
   do_backup
@@ -173,15 +206,19 @@ if $NEED_UPDATE; then
     fi
   done
 
-  log $YELLOW "Extração concluída em ${SECONDS}s! Restaurando arquivos do backup..."
+  log $YELLOW "Extração concluída em ${SECONDS}s! Restaurando dados e pacotes personalizados..."
 
-  for item in worlds behavior_packs resource_packs structures server.properties permissions.json allowlist.json; do
+  # Restore world data and settings, but keep the official content packs
+  # extracted from the new server archive.
+  for item in worlds structures server.properties permissions.json allowlist.json; do
     if [[ -e "$BACKUP_TARGET/$item" ]]; then
       log $YELLOW "Restaurando $item..."
       rm -rf "$SERVER_DIR/$item"
       cp -r "$BACKUP_TARGET/$item" "$SERVER_DIR/"
     fi
   done
+
+  restore_custom_packs
 
   log $YELLOW "Removendo $TMP_ZIP"
   chmod +x "$SERVER_BIN"
