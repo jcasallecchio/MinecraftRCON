@@ -5,6 +5,7 @@ set -eo pipefail
 SERVER_DIR="/share/minecraftRCON"
 BACKUP_DIR="$SERVER_DIR/backups"
 LAST_VERSION_FILE="$SERVER_DIR/lastversion.txt"
+PACKS_VERSION_FILE="$SERVER_DIR/official_packs_version.txt"
 SERVER_BIN="$SERVER_DIR/bedrock_server"
 DEBUG=${DEBUG:-false}
 EULA=${EULA:-true}
@@ -111,19 +112,24 @@ INSTALLED_VERSION=""
 if [[ -f "$LAST_VERSION_FILE" ]]; then
   INSTALLED_VERSION=$(<"$LAST_VERSION_FILE")
 fi
+INSTALLED_PACKS_VERSION=""
+if [[ -f "$PACKS_VERSION_FILE" ]]; then
+  INSTALLED_PACKS_VERSION=$(<"$PACKS_VERSION_FILE")
+fi
 
 # --- Busca última versão disponível online ---
 lookupVersion serverBedrockLinux
 log $GREEN "Versão disponível online: $VERSION"
 log $GREEN "Versão instalada localmente: ${INSTALLED_VERSION:-nenhuma}"
+log $GREEN "Versão dos pacotes oficiais sincronizada: ${INSTALLED_PACKS_VERSION:-nenhuma}"
 
 # --- Decide se precisa atualizar ---
 NEED_UPDATE=true
-if [[ "$VERSION" == "$INSTALLED_VERSION" ]] && [[ -f "$SERVER_BIN" ]]; then
+if [[ "$VERSION" == "$INSTALLED_VERSION" ]] && [[ -f "$SERVER_BIN" ]] && [[ "$VERSION" == "$INSTALLED_PACKS_VERSION" ]]; then
   log $GREEN "Servidor já está na última versão, não será atualizado!"
   NEED_UPDATE=false
 else
-  log $YELLOW "Versão instalada ($INSTALLED_VERSION) diferente da disponível ($VERSION), atualizando..."
+  log $YELLOW "Servidor ou pacotes oficiais precisam ser sincronizados com a versão $VERSION, atualizando..."
   log $GREEN "URL para download: $DOWNLOAD_URL"
 fi
 
@@ -225,6 +231,7 @@ if $NEED_UPDATE; then
   rm "$TMP_ZIP"
 
   echo "$VERSION" > "$LAST_VERSION_FILE"
+  echo "$VERSION" > "$PACKS_VERSION_FILE"
 
   log $GREEN "Atualização concluída para a versão $VERSION."
 fi

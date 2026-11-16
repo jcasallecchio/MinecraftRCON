@@ -1,6 +1,7 @@
 # Histórico de versões
 
 ## 1.3.5
+- Sincroniza os pacotes oficiais uma vez na primeira inicialização após esta atualização, mesmo que o binário do servidor já esteja na versão mais recente.
 - Mantém os pacotes oficiais incluídos no servidor recém-baixado durante as atualizações.
 - Restaura do backup apenas pacotes personalizados ausentes na nova distribuição, sem substituir os pacotes oficiais.
 
