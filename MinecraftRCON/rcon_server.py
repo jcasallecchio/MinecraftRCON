@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -35,6 +36,8 @@ RATE_WINDOW_SECONDS = 60
 MAX_REQUESTS_PER_MINUTE = 60
 MAX_COMMANDS_PER_MINUTE = 30
 MAX_BACKUPS_PER_HOUR = 3
+TELEMETRY_INTERVAL_SECONDS = 15
+API_VERSION = "1"
 
 Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
 command_logger = logging.getLogger("rcon_commands")
@@ -82,6 +85,13 @@ RESTORE_REQUEST_LOCK = threading.Lock()
 RATE_LIMIT_LOCK = threading.Lock()
 RATE_BUCKETS = defaultdict(deque)
 SCHEDULER_STOP = threading.Event()
+TELEMETRY_LOCK = threading.Lock()
+PLAYER_TELEMETRY = {
+    "online_count": None,
+    "max_count": None,
+    "names": [],
+    "updated_at": None,
+}
 
 
 def load_allowed_networks(value):
@@ -207,6 +217,153 @@ def read_console_output(offset, timeout=CONSOLE_CAPTURE_SECONDS, quiet=CONSOLE_Q
     return lines
 
 
+def sample_player_telemetry():
+    """Refresh online-player data from Bedrock's native `list` console command."""
+    with SERVER_OPERATION_LOCK:
+        try:
+            log_offset = SERVER_LOG_FILE.stat().st_size
+        except OSError:
+            log_offset = 0
+        if not send_console_command("list"):
+            return False
+        output = "\n".join(read_console_output(log_offset))
+
+    match = re.search(
+        r"(\d+)\s*/\s*(\d+)\s+players?\s+online\s*:?\s*(.*)",
+        output,
+        re.IGNORECASE,
+    )
+    if not match:
+        return False
+    names = [name.strip() for name in match.group(3).split(",") if name.strip()]
+    with TELEMETRY_LOCK:
+        PLAYER_TELEMETRY.update({
+            "online_count": int(match.group(1)),
+            "max_count": int(match.group(2)),
+            "names": names,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+    return True
+
+
+def telemetry_scheduler():
+    while not SCHEDULER_STOP.is_set():
+        if find_screen_session("mc") is not None:
+            try:
+                if not sample_player_telemetry():
+                    app.logger.debug("Bedrock player telemetry was not available in the console output")
+            except Exception:
+                app.logger.exception("Could not refresh Bedrock player telemetry")
+        SCHEDULER_STOP.wait(TELEMETRY_INTERVAL_SECONDS)
+
+
+def _read_server_properties():
+    try:
+        properties = {}
+        for line in (SERVER_DIR / "server.properties").read_text(encoding="utf-8-sig").splitlines():
+            key, separator, value = line.partition("=")
+            if separator:
+                properties[key.strip()] = value.strip()
+        return properties
+    except OSError:
+        return {}
+
+
+def _server_version():
+    try:
+        return (SERVER_DIR / "lastversion.txt").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _bedrock_memory_bytes():
+    """Return RSS for the Bedrock process when /proc exposes it."""
+    try:
+        for process_dir in Path("/proc").iterdir():
+            if not process_dir.name.isdigit():
+                continue
+            try:
+                if (process_dir / "comm").read_text(encoding="utf-8").strip() != "bedrock_server":
+                    continue
+                for line in (process_dir / "status").read_text(encoding="utf-8").splitlines():
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) * 1024
+            except (OSError, ValueError, IndexError):
+                continue
+    except OSError:
+        pass
+    return None
+
+
+def get_telemetry():
+    properties = _read_server_properties()
+    maintenance = MAINTENANCE_FILE.exists()
+    running = find_screen_session("mc") is not None
+    status = "maintenance" if maintenance else "running" if running else "offline"
+    now = datetime.now(timezone.utc)
+    started_at = None
+    uptime_seconds = None
+    try:
+        started_at = float((SERVER_DIR / ".server_started_at").read_text(encoding="ascii").strip())
+        uptime_seconds = max(0, int(time.time() - started_at)) if running else None
+    except (OSError, ValueError):
+        pass
+    with TELEMETRY_LOCK:
+        players = dict(PLAYER_TELEMETRY)
+    player_sample_time = None
+    if players["updated_at"]:
+        try:
+            player_sample_time = datetime.fromisoformat(players["updated_at"])
+        except ValueError:
+            pass
+    player_sample_age = (now - player_sample_time).total_seconds() if player_sample_time else None
+    players["stale"] = player_sample_age is None or player_sample_age > TELEMETRY_INTERVAL_SECONDS * 3
+    players["sample_age_seconds"] = int(player_sample_age) if player_sample_age is not None else None
+    return {
+        "schema_version": f"{API_VERSION}.0",
+        "collected_at": now.isoformat(),
+        "server": {
+            "status": status,
+            "edition": "bedrock",
+            "command_dialect": "minecraft-bedrock",
+            "version": _server_version(),
+            "uptime_seconds": uptime_seconds,
+            "started_at": datetime.fromtimestamp(started_at, timezone.utc).isoformat() if started_at else None,
+            "world_name": properties.get("level-name"),
+            "game_mode": properties.get("gamemode"),
+            "difficulty": properties.get("difficulty"),
+            "max_players": _int_or_none(properties.get("max-players")),
+        },
+        "players": players,
+        "performance": {"bedrock_memory_bytes": _bedrock_memory_bytes() if running else None},
+    }
+
+
+def _int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def api_info():
+    return {
+        "api_version": API_VERSION,
+        "addon": "bedrock_server_rcon",
+        "server": {"edition": "bedrock", "command_dialect": "minecraft-bedrock", "version": _server_version()},
+        "capabilities": {
+            "command_execution": {"method": "POST", "path": "/api/v1/commands", "body": {"command": "string"}},
+            "telemetry": {"method": "GET", "path": "/api/v1/telemetry", "refresh_seconds": TELEMETRY_INTERVAL_SECONDS},
+            "command_mode": "raw_console",
+            "backups": {
+                "list": {"method": "GET", "path": "/backups"},
+                "create": {"method": "POST", "path": "/backups"},
+                "restore": {"method": "POST", "path": "/backups/{backup_id}/restore"},
+            },
+        },
+    }
+
+
 def run_scheduled_backup():
     properties_path = SERVER_DIR / "server.properties"
     try:
@@ -296,7 +453,7 @@ def protect_rcon_routes():
     client_ip = request.remote_addr or "unknown"
     if not client_ip_allowed(client_ip):
         return jsonify({"status": "error", "message": "Client IP is not allowed"}), 403
-    is_command = request.path == "/rcon" and request.method == "POST"
+    is_command = request.path in {"/rcon", "/api/v1/commands"} and request.method == "POST"
     is_backup_operation = request.path == "/backups" and request.method == "POST" or request.path.endswith("/restore") and request.method == "POST"
     if not request_rate_allowed(client_ip, command_request=is_command, backup_request=is_backup_operation):
         return jsonify({"status": "error", "message": "Rate limit exceeded"}), 429
@@ -304,6 +461,7 @@ def protect_rcon_routes():
 
 
 @app.route("/rcon", methods=["POST"])
+@app.route("/api/v1/commands", methods=["POST"])
 def rcon():
     client_ip = request.remote_addr
 
@@ -351,6 +509,20 @@ def rcon():
         "console_output": console_output,
         "message": "Command sent. Console output is best-effort and does not confirm execution of this specific command.",
     })
+
+
+@app.get("/api/v1/info")
+def versioned_api_info():
+    if not authorized():
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    return jsonify(api_info())
+
+
+@app.get("/api/v1/telemetry")
+def versioned_telemetry():
+    if not authorized():
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    return jsonify(get_telemetry())
 
 
 @app.get("/backups")
@@ -413,4 +585,5 @@ if __name__ == "__main__":
 
     print(f"[RCON] Servidor RCON iniciado na porta {RCON_PORT}")
     threading.Thread(target=backup_scheduler, name="world-backup-scheduler", daemon=True).start()
+    threading.Thread(target=telemetry_scheduler, name="bedrock-telemetry", daemon=True).start()
     serve(app, host="0.0.0.0", port=RCON_PORT)

@@ -19,6 +19,18 @@ Send commands to `POST http://<host>:19133/rcon` with `Content-Type: application
 
 The unauthenticated `GET http://<host>:19133/health` endpoint returns `ready` only while the Bedrock session is running.
 
+## Future console integration API
+
+The authenticated, versioned API is available on the same port. Send the same `Authorization: Bearer <token>` header to these endpoints:
+
+- `GET /api/v1/info` describes the API version, Bedrock command dialect, and supported operations.
+- `GET /api/v1/telemetry` returns the server edition/version/status, world settings, process memory, uptime, and latest player list sample. Player data refreshes in the background every 15 seconds and includes its age and stale status.
+- `POST /api/v1/commands` accepts `{"command":"list"}` and returns the same best-effort console result as `/rcon`; `/rcon` remains available for existing clients.
+
+Every telemetry response includes `schema_version`, `collected_at`, `server`, `players`, and `performance`. The server reports `edition: "bedrock"` and `command_dialect: "minecraft-bedrock"`, allowing a future console to choose its edition-specific adapter.
+
+The command endpoint passes native Bedrock console commands through without translating them. A future multi-edition console can use the `edition` and `command_dialect` fields to select the matching adapter and translate shared actions such as player management per edition. Keep the add-on token in a trusted backend that talks to this API over a trusted network, VPN, or HTTPS proxy; do not embed it in a browser application.
+
 RCON command logs are written to `/share/minecraftRCON/rcon_commands.log` and rotated at 2 MiB, keeping up to five previous files.
 
 ## RCON network access

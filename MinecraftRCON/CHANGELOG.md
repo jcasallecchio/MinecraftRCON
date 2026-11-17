@@ -1,5 +1,9 @@
 # Histórico de versões
 
+## 1.5.0
+- Adiciona API versionada para integração do Bedrock com o futuro console, incluindo capacidades, telemetria e execução de comandos.
+- Publica telemetria de versão, estado, mundo, jogadores, tempo ligado e memória do processo Bedrock.
+
 ## 1.4.1
 - Corrige a busca de `backup_manager` durante a recuperação de restaurações interrompidas na inicialização.
 

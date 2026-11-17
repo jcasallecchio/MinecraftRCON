@@ -487,6 +487,8 @@ start_and_wait_server() {
     tail -n 40 "$SERVER_DIR/server.log" || true
     return 1
   fi
+  printf '%s\n' "$(date +%s)" > "$SERVER_DIR/.server_started_at.tmp"
+  mv "$SERVER_DIR/.server_started_at.tmp" "$SERVER_DIR/.server_started_at"
   log $GREEN "Servidor Minecraft pronto."
 }
 
