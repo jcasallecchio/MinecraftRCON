@@ -1,20 +1,43 @@
-# homeassistant-addons
+<p align="center">
+  <img src="MinecraftRCON/icon.png" width="96" alt="Ícone do MinecraftRCON">
+</p>
 
-[![Stargazers repo roster for @jcasallecchio/homeassistant-addons](https://git-lister.onrender.com/api/stars/jcasallecchio/homeassistant-addons?limit=30)](https://github.com/jcasallecchio/homeassistant-addons/stargazers)
+<h1 align="center">MinecraftRCON</h1>
 
-## About
+<p align="center">Servidor dedicado de Minecraft Bedrock para Home Assistant OS, com API de administração e backups do mundo.</p>
 
-My personal repository of tools and materials that I created or adapted for Home Assitant.
+<p align="center">
+  <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fjcasallecchio%2FMinecraftRCON"><img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Adicionar repositório ao Home Assistant"></a>
+</p>
 
-## Credits
+## O que o projeto oferece
 
-MinecraftRCON: Based on the original code by jdeath [https://github.com/jdeath/homeassistant-addons/]
+- **Servidor Bedrock com NetherNet.** Jogue na rede local ou configure o roteador para receber jogadores pela internet.
+- **Atualização na inicialização.** O add-on consulta a versão oficial do Bedrock e mantém a instalação existente se uma falha de download impedir a atualização.
+- **Comandos e telemetria.** A API HTTP permite enviar comandos ao console e consultar versão, jogadores, memória e tempo de atividade. Use-a para integrar um painel ou uma automação.
+- **Backups do mundo.** Crie cópias programadas ou sob demanda, com retenção configurável e restauração autenticada.
 
-## Installation
+## Instalação rápida
 
-[![Add repository on my Home Assistant][repository-badge]][repository-url]
+1. No **Home Assistant OS** em um host **x86-64 (amd64)**, abra **Configurações → Aplicativos (ou Add-ons) → Instalar aplicativo**.
+2. No menu **⋮ → Repositórios**, adicione `https://github.com/jcasallecchio/MinecraftRCON`. O botão acima abre essa etapa com o endereço preenchido.
+3. Instale **Bedrock Server with RCON**. Na aba **Configuração**, defina um `rcon_token` aleatório com pelo menos 32 caracteres. Salve e inicie o add-on.
+4. No Minecraft **Bedrock Edition**, abra **Jogar → Servidores → Adicionar servidor** e use o IP local do Home Assistant na porta **19132**. Confira o primeiro acesso na rede local antes de configurar a internet.
 
-If you want to do add the repository manually, please follow the procedure highlighted in the [Home Assistant website](https://home-assistant.io/hassio/installing_third_party_addons). Use the following URL to add this repository: https://github.com/jcasallecchio/homeassistant-addons
+Se você já instalou o add-on pelo endereço antigo do repositório, continue usando a instalação existente. O Home Assistant identifica o add-on pela URL que foi cadastrada.
 
-[repository-badge]: https://img.shields.io/badge/Add%20repository%20to%20my-Home%20Assistant-41BDF5?logo=home-assistant&style=for-the-badge
-[repository-url]: https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fjcasallecchio%2Fhomeassistant-addons
+## Guias
+
+| Guia | O que você encontra |
+| --- | --- |
+| [Instalação e configuração](MinecraftRCON/DOCS.md) | Primeiro acesso, mundo existente, parâmetros do add-on, API e backups |
+| [Acesso pela internet](docs/acesso-remoto.md) | Encaminhamento TCP e UDP, DuckDNS, Cloudflare e teste no 4G/5G |
+| [Histórico de versões](MinecraftRCON/CHANGELOG.md) | Mudanças por versão do add-on |
+
+> Para jogar fora de casa, libere somente as portas do jogo descritas no guia. Mantenha a API de administração (`19133/TCP`) na rede local ou em uma VPN.
+
+## Suporte e créditos
+
+Ao [abrir uma issue](https://github.com/jcasallecchio/MinecraftRCON/issues/new), informe a versão do add-on, a versão do Bedrock, o modelo do roteador se a falha for de rede e se a conexão é local ou externa. Envie apenas o trecho relevante do log, com tokens e endereços pessoais ocultos.
+
+Baseado no [add-on original de jdeath](https://github.com/jdeath/homeassistant-addons). Código sob a [licença MIT](LICENSE.txt).
