@@ -16,14 +16,14 @@ Abra **Encaminhamento de portas**, geralmente no menu **NAT**, e direcione **TCP
 
 ### Faixa UDP fixa em redes que precisam de encaminhamento
 
-A tabela mostra como reproduzir a configuração que funcionou no TP-Link Archer AX72. Crie regras separadas para a porta TCP e a faixa UDP. Se houver firewall no host, permita também a faixa UDP local.
+A tabela mostra uma configuração de exemplo para redes em que o encaminhamento UDP precisa usar uma faixa fixa. Crie uma regra TCP para a sinalização e outra regra UDP para a faixa de jogo. Use o IP reservado do Home Assistant. Se houver firewall no host, permita também a faixa UDP local.
 
 | Protocolo | Porta externa | Destino local | Porta interna |
 | --- | --- | --- | --- |
 | TCP | `19132` | `192.168.1.50` | `19132` |
 | UDP | `19140–19155` | `192.168.1.50` | `19140–19155` |
 
-No **Archer AX72**, abra **Avançado → Encaminhamento NAT → Encaminhamento de Portas**. A regra UDP deve encaminhar cada porta para a correspondente, de `19140 → 19140` até `19155 → 19155`. Se o campo **Porta interna** desaparecer no modo de faixa, volte temporariamente ao modo de porta única e apague o valor antigo antes de selecionar a faixa novamente. Salve e confira a lista de regras. Um valor único antigo, como `19132`, pode fazer o roteador enviar a faixa toda à mesma porta. [Manual do Archer AX72](https://www.tp-link.com/us/user-guides/archer-ax72_v1/chapter-12-nat-forwarding) · [Guia de encaminhamento da TP-Link](https://www.tp-link.com/uk/support/faq/1379/)
+Os nomes e caminhos do menu variam entre fabricantes. Procure funções como **Encaminhamento de portas**, **Port Forwarding**, **Servidor virtual** ou **NAT**. Configure o protocolo, a porta ou faixa externa, o IP local de destino e a porta ou faixa interna. Para o exemplo UDP, encaminhe cada porta externa à porta interna correspondente, de `19140 → 19140` até `19155 → 19155`. Se o seu roteador esconder um campo de porta interna ao escolher uma faixa, confira o manual para saber como representar o mapeamento um a um. Revise as portas salvas para confirmar que a faixa UDP não está sendo enviada inteira para uma única porta interna.
 
 Com o add-on parado, ajuste as propriedades existentes em `/share/minecraftRCON/server.properties` e inicie-o novamente.
 
@@ -93,4 +93,4 @@ O aplicativo Duck DNS atualiza o registro do DuckDNS periodicamente. Se você ca
 
 Para conferir só a sinalização TCP a partir de outra rede, use `curl --max-time 5 -i http://minecraft.example.com:19132/v1/join` com seu próprio endereço. Para verificar o UDP, entre no mundo pelo jogo.
 
-Na instalação validada, foi preciso ajustar tanto a opção de dados móveis do Minecraft quanto o encaminhamento UDP do Archer. Depois dos dois ajustes, a entrada no mundo funcionou pelo DuckDNS e pelo domínio na Cloudflare.
+Na instalação validada, foi preciso ajustar tanto a opção de dados móveis do Minecraft quanto o encaminhamento UDP do roteador. Depois dos dois ajustes, a entrada no mundo funcionou pelo DuckDNS e pelo domínio na Cloudflare.
