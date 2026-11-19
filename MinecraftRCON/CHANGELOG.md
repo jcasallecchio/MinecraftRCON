@@ -1,5 +1,10 @@
 # Histórico de versões
 
+## 1.6.0
+- Adiciona feed persistente de entrada, saída e morte de jogadores, com retenção de sete dias.
+- Publica os eventos pela API autenticada `/api/v1/events` e atualiza o MineDev Console automaticamente.
+- Permite filtrar o feed por jogador ou consultar a atividade geral.
+
 ## 1.5.0
 - Adiciona API versionada para integração do Bedrock com o futuro console, incluindo capacidades, telemetria e execução de comandos.
 - Publica telemetria de versão, estado, mundo, jogadores, tempo ligado e memória do processo Bedrock.

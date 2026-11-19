@@ -57,6 +57,7 @@ A API aceita comandos nativos do Bedrock por HTTP e tem como base `http://IP_LOC
 | `GET /health` | Verifica se a sessão do Bedrock está ativa. Responde `ready` quando disponível e HTTP 503 quando indisponível ou em manutenção. Dispensa token. |
 | `GET /api/v1/info` | Mostra a versão da API, o dialeto de comandos e as operações disponíveis. |
 | `GET /api/v1/telemetry` | Retorna o estado e a versão do servidor, dados do mundo, jogadores, memória do processo e tempo de atividade. A amostra de jogadores é atualizada em segundo plano a cada 15 segundos e indica sua idade e se está desatualizada. |
+| `GET /api/v1/events?after=<id>&limit=<n>` | Retorna eventos de entrada, saída e morte dos jogadores. A API mantém até sete dias e 5.000 eventos. `after` busca eventos posteriores ao cursor e `limit` aceita de 1 a 200. |
 | `POST /api/v1/commands` | Envia um comando ao console. `POST /rcon` continua disponível para integrações existentes. |
 | `GET /backups` | Lista os backups disponíveis para restauração. |
 | `POST /backups` | Cria um backup do mundo sob demanda. |
@@ -74,6 +75,8 @@ curl --fail-with-body http://192.168.1.50:19133/api/v1/commands \
 Envie um comando por requisição, com até 1024 caracteres. A resposta inclui `request_id`, `sent` e, quando disponíveis, linhas recentes do console. A entrega ao console pode ser confirmada pela API. A execução pelo jogo deve ser verificada no mundo ou nos logs. A API limita cada IP a 60 requisições por minuto e 30 comandos por minuto.
 
 Integrações podem usar `edition: "bedrock"` e `command_dialect: "minecraft-bedrock"` para identificar os comandos aceitos. A telemetria inclui `schema_version`, `collected_at`, `server`, `players` e `performance`. O log da API fica em `/share/minecraftRCON/rcon_commands.log` e é rotacionado a cada 2 MiB, com até cinco arquivos anteriores.
+
+O feed de jogadores é lido do log nativo do servidor. Ele armazena apenas entradas, saídas e mensagens de morte, sem registrar mensagens de chat. Os eventos são gravados em `/share/minecraftRCON/player_events.jsonl` e ficam disponíveis no MineDev Console por até sete dias, limitados aos 5.000 eventos mais recentes.
 
 Use o [MineDev Console](https://github.com/jcasallecchio/MinecraftRCON/tree/main/console) se preferir administrar o servidor por um painel web. O guia do painel explica como configurar o mesmo token da API e usar os comandos, a telemetria e o histórico.
 

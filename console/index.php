@@ -16,7 +16,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
   <meta name="csrf-token" content="<?= htmlspecialchars((string)$_SESSION['csrf'], ENT_QUOTES, 'UTF-8') ?>">
   <meta name="theme-color" content="#10140f">
   <title>MineDev Console</title>
-  <link rel="stylesheet" href="assets/app.css?v=11">
+  <link rel="stylesheet" href="assets/app.css?v=12">
 </head>
 <body class="<?= $isAuthenticated ? 'authenticated' : 'guest' ?>">
   <div class="ambient ambient-one"></div>
@@ -106,6 +106,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
 
         <nav class="tabs" aria-label="Seções do console">
           <button class="tab active" data-tab="console" type="button"><span>⌘</span> Console</button>
+          <button class="tab" data-tab="activity" type="button"><span>◉</span> Feed ao vivo</button>
           <button class="tab" data-tab="commands" type="button"><span>⌕</span> Comandos & glossário</button>
           <button class="tab" data-tab="history" type="button"><span>◷</span> Histórico <i><?= $LOG_RETENTION_DAYS ?>d</i></button>
         </nav>
@@ -129,6 +130,12 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
           </div>
         </section>
 
+        <section class="view" id="view-activity" data-view="activity">
+          <div class="section-intro"><div><div class="eyebrow">EVENTOS DO MUNDO · LIVE</div><h2>Atividade dos jogadores</h2><p>Entradas, saídas e mortes. O feed mantém os eventos recentes por até 7 dias.</p></div><span class="terminal-live"><span class="pulse"></span> ATUALIZAÇÃO AUTOMÁTICA</span></div>
+          <div class="activity-tools"><label class="filter-select-label" for="activityPlayer">Jogador</label><select class="activity-player-select" id="activityPlayer"><option value="">Todos os jogadores</option></select><button class="ghost-button" id="activityRefresh" type="button">Atualizar feed ⟳</button><span class="activity-updated" id="activityUpdated">Aguardando eventos…</span></div>
+          <div class="activity-list" id="activityList" aria-live="polite" aria-label="Feed de atividade dos jogadores"></div>
+        </section>
+
         <section class="view" id="view-commands" data-view="commands">
           <div class="section-intro"><div><div class="eyebrow">BEDROCK COMMAND REFERENCE</div><h2>Comandos e glossário</h2><p>Autocomplete para comandos documentados, com sintaxe rápida e termos úteis.</p></div><a class="text-link" href="https://learn.microsoft.com/en-us/minecraft/creator/commands/commands?view=minecraft-bedrock-stable" target="_blank" rel="noreferrer">Referência oficial ↗</a></div>
           <div class="catalog-tools"><label class="search-box"><span>⌕</span><input id="catalogSearch" type="search" placeholder="Buscar comando ou descrição…" autocomplete="off"></label><div class="category-filters" id="categoryFilters"></div></div>
@@ -150,6 +157,6 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
     </div>
   </div>
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
-  <script src="assets/app.js?v=7" defer></script>
+  <script src="assets/app.js?v=8" defer></script>
 </body>
 </html>

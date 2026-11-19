@@ -23,6 +23,7 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
 SERVER_DIR = Path(os.environ.get("MINECRAFT_SERVER_DIR", "/share/minecraftRCON"))
 LOG_FILE = os.environ.get("RCON_LOG_FILE", str(SERVER_DIR / "rcon_commands.log"))
 SERVER_LOG_FILE = SERVER_DIR / "server.log"
+PLAYER_EVENTS_FILE = SERVER_DIR / "player_events.jsonl"
 BACKUP_DIR = SERVER_DIR / "backups" / "scheduled"
 MAINTENANCE_FILE = SERVER_DIR / ".maintenance"
 OPTIONS_FILE = os.environ.get("RCON_OPTIONS_FILE", "/data/options.json")
@@ -37,6 +38,9 @@ MAX_REQUESTS_PER_MINUTE = 60
 MAX_COMMANDS_PER_MINUTE = 30
 MAX_BACKUPS_PER_HOUR = 3
 TELEMETRY_INTERVAL_SECONDS = 15
+PLAYER_EVENTS_POLL_SECONDS = 1
+PLAYER_EVENTS_RETENTION_SECONDS = 7 * 24 * 60 * 60
+PLAYER_EVENTS_MAX_COUNT = 5000
 API_VERSION = "1"
 
 Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
@@ -86,12 +90,27 @@ RATE_LIMIT_LOCK = threading.Lock()
 RATE_BUCKETS = defaultdict(deque)
 SCHEDULER_STOP = threading.Event()
 TELEMETRY_LOCK = threading.Lock()
+PLAYER_EVENTS_LOCK = threading.Lock()
+PLAYER_EVENTS_STOP = threading.Event()
 PLAYER_TELEMETRY = {
     "online_count": None,
     "max_count": None,
     "names": [],
     "updated_at": None,
 }
+
+DEATH_MESSAGE_PATTERN = re.compile(
+    r"^(?P<player>.+?) (?P<message>"
+    r"was slain by|was shot by|was pummeled by|was fireballed by|was blown up by|"
+    r"was killed by|was sniped by|was spitballed by|was skewered by|was impaled by|"
+    r"was roasted in dragon breath|was killed by magic|fell from a high place|"
+    r"hit the ground too hard|tried to swim in lava|went up in flames|burned to death|"
+    r"froze to death|starved to death|suffocated in a wall|pricked to death|"
+    r"discovered floor was lava|experienced kinetic energy|went off with a bang|"
+    r"drowned|blew up|died"
+    r")(?P<cause>.*)$",
+    re.IGNORECASE,
+)
 
 
 def load_allowed_networks(value):
@@ -257,6 +276,101 @@ def telemetry_scheduler():
         SCHEDULER_STOP.wait(TELEMETRY_INTERVAL_SECONDS)
 
 
+def _append_player_event(event_type, player, detail=""):
+    player = str(player).strip()
+    if not player or len(player) > 64:
+        return
+    now = time.time()
+    event = {
+        "id": int(now * 1_000_000),
+        "timestamp": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+        "type": event_type,
+        "player": player,
+        "detail": str(detail).strip()[:240],
+    }
+    with PLAYER_EVENTS_LOCK:
+        try:
+            PLAYER_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            events = []
+            if PLAYER_EVENTS_FILE.exists():
+                for line in PLAYER_EVENTS_FILE.read_text(encoding="utf-8").splitlines():
+                    try:
+                        item = json.loads(line)
+                        if now - float(item.get("id", 0)) / 1_000_000 <= PLAYER_EVENTS_RETENTION_SECONDS:
+                            events.append(item)
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        continue
+            events.append(event)
+            events = events[-PLAYER_EVENTS_MAX_COUNT:]
+            temporary = PLAYER_EVENTS_FILE.with_suffix(".jsonl.tmp")
+            temporary.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in events), encoding="utf-8")
+            temporary.replace(PLAYER_EVENTS_FILE)
+        except OSError:
+            app.logger.exception("Could not persist Bedrock player event")
+
+
+def _parse_player_event(line):
+    text = re.sub(r"^(?:\[[^\]]+\]\s*)+", "", line.strip())
+    connected = re.search(r"\bPlayer connected:\s*(?P<player>[^,]+)", text, re.IGNORECASE)
+    if connected:
+        return "join", connected.group("player"), ""
+    disconnected = re.search(r"\bPlayer disconnected:\s*(?P<player>[^,]+)", text, re.IGNORECASE)
+    if disconnected:
+        return "leave", disconnected.group("player"), ""
+    death = DEATH_MESSAGE_PATTERN.match(text)
+    if death:
+        return "death", death.group("player"), (death.group("message") + death.group("cause")).strip()
+    return None
+
+
+def player_events_scheduler():
+    """Tail only new Bedrock log lines, keeping a bounded seven-day event feed."""
+    offset = 0
+    try:
+        offset = SERVER_LOG_FILE.stat().st_size
+    except OSError:
+        pass
+    pending = b""
+    while not PLAYER_EVENTS_STOP.is_set():
+        try:
+            if SERVER_LOG_FILE.exists():
+                size = SERVER_LOG_FILE.stat().st_size
+                if size < offset:
+                    offset = 0
+                    pending = b""
+                if size > offset:
+                    with SERVER_LOG_FILE.open("rb") as log_file:
+                        log_file.seek(offset)
+                        chunk = log_file.read()
+                        offset = log_file.tell()
+                    lines = (pending + chunk).split(b"\n")
+                    pending = lines.pop()
+                    for line in lines:
+                        parsed = _parse_player_event(line.decode("utf-8", errors="replace"))
+                        if parsed:
+                            _append_player_event(*parsed)
+        except OSError:
+            app.logger.exception("Could not read Bedrock server log for player events")
+        PLAYER_EVENTS_STOP.wait(PLAYER_EVENTS_POLL_SECONDS)
+
+
+def get_player_events(after=0, limit=100):
+    with PLAYER_EVENTS_LOCK:
+        events = []
+        try:
+            for line in PLAYER_EVENTS_FILE.read_text(encoding="utf-8").splitlines():
+                try:
+                    event = json.loads(line)
+                    if int(event.get("id", 0)) > after:
+                        events.append(event)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    continue
+        except OSError:
+            pass
+    events.sort(key=lambda item: int(item.get("id", 0)))
+    return events[:limit] if after else events[-limit:]
+
+
 def _read_server_properties():
     try:
         properties = {}
@@ -354,6 +468,7 @@ def api_info():
         "capabilities": {
             "command_execution": {"method": "POST", "path": "/api/v1/commands", "body": {"command": "string"}},
             "telemetry": {"method": "GET", "path": "/api/v1/telemetry", "refresh_seconds": TELEMETRY_INTERVAL_SECONDS},
+            "player_events": {"method": "GET", "path": "/api/v1/events", "retention_days": 7},
             "command_mode": "raw_console",
             "backups": {
                 "list": {"method": "GET", "path": "/backups"},
@@ -525,6 +640,17 @@ def versioned_telemetry():
     return jsonify(get_telemetry())
 
 
+@app.get("/api/v1/events")
+def versioned_player_events():
+    if not authorized():
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    after = max(0, _int_or_none(request.args.get("after")) or 0)
+    limit = max(1, min(200, _int_or_none(request.args.get("limit")) or 100))
+    events = get_player_events(after, limit)
+    cursor = max((int(event["id"]) for event in events), default=after)
+    return jsonify({"events": events, "cursor": cursor, "retention_days": 7})
+
+
 @app.get("/backups")
 def get_backups():
     if not authorized():
@@ -586,4 +712,5 @@ if __name__ == "__main__":
     print(f"[RCON] Servidor RCON iniciado na porta {RCON_PORT}")
     threading.Thread(target=backup_scheduler, name="world-backup-scheduler", daemon=True).start()
     threading.Thread(target=telemetry_scheduler, name="bedrock-telemetry", daemon=True).start()
+    threading.Thread(target=player_events_scheduler, name="bedrock-player-events", daemon=True).start()
     serve(app, host="0.0.0.0", port=RCON_PORT)

@@ -11,11 +11,15 @@
   let activeCategory = 'Todos';
   let historyRecords = [];
   let historyCursor = 0;
+  let activityRecords = [];
+  let activityCursor = 0;
+  let activityLoading = false;
   let commandHistory = [];
   let historyPointer = 0;
   let selectedSuggestion = -1;
   let lastTelemetry = null;
   let pollTimer = null;
+  let activityPollTimer = null;
 
   const glossary = [
     { term: 'Alvo', tag: 'Sintaxe', description: 'Jogador, entidade ou seletor escolhido para receber a ação de um comando.' },
@@ -127,9 +131,10 @@
   function switchTab(name) {
     $$('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === name));
     $$('.view').forEach(view => view.classList.toggle('active', view.dataset.view === name));
-    const titles = { console: 'Visão geral', commands: 'Referência', history: 'Histórico' };
+    const titles = { console: 'Visão geral', activity: 'Feed ao vivo', commands: 'Referência', history: 'Histórico' };
     $('#pageTitle').textContent = titles[name] || 'Visão geral';
     if (name === 'history' && historyRecords.length === 0) loadHistory(true);
+    if (name === 'activity') loadPlayerEvents(activityRecords.length === 0);
     if (name === 'console') $('#commandInput').focus();
   }
   $$('.tab').forEach(tab => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
@@ -502,10 +507,74 @@
   $('#historyMore')?.addEventListener('click', () => loadHistory(false));
   $('#historySearch')?.addEventListener('input', renderHistory);
 
+  function renderPlayerEvents() {
+    const list = $('#activityList');
+    if (!list) return;
+    const selected = $('#activityPlayer').value;
+    const records = activityRecords.filter(event => !selected || event.player === selected).slice().reverse();
+    list.replaceChildren();
+    if (!records.length) {
+      const empty = document.createElement('div'); empty.className = 'empty-state';
+      empty.textContent = activityRecords.length ? 'Nenhum evento para este jogador no período.' : 'Nenhuma atividade recente. Eventos novos aparecem aqui automaticamente.';
+      list.append(empty); return;
+    }
+    records.forEach(event => {
+      const card = document.createElement('article'); card.className = `activity-item ${event.type}`;
+      const icon = document.createElement('span'); icon.className = 'activity-icon';
+      icon.textContent = event.type === 'join' ? '↗' : event.type === 'leave' ? '↙' : '✕';
+      const content = document.createElement('div'); content.className = 'activity-content';
+      const title = document.createElement('div'); title.className = 'activity-title';
+      const player = document.createElement('strong'); player.textContent = event.player || 'Jogador';
+      const verb = document.createElement('span'); verb.textContent = event.type === 'join' ? ' entrou no servidor' : event.type === 'leave' ? ' saiu do servidor' : ' morreu';
+      title.append(player, verb); content.append(title);
+      if (event.type === 'death' && event.detail) {
+        const detail = document.createElement('div'); detail.className = 'activity-detail'; detail.textContent = event.detail; content.append(detail);
+      }
+      const time = document.createElement('time'); time.className = 'activity-time';
+      const date = new Date(event.timestamp);
+      if (!Number.isNaN(date.getTime())) { time.dateTime = date.toISOString(); time.textContent = date.toLocaleString('pt-BR'); }
+      card.append(icon, content, time); list.append(card);
+    });
+  }
+
+  async function loadPlayerEvents(reset = false) {
+    if (activityLoading) return;
+    activityLoading = true;
+    try {
+      const query = `after=${reset ? 0 : activityCursor}&limit=100`;
+      const payload = await api('events', { query });
+      const incoming = Array.isArray(payload.events) ? payload.events : [];
+      if (reset) { activityRecords = incoming; activityCursor = 0; }
+      else if (incoming.length) {
+        const known = new Set(activityRecords.map(event => Number(event.id)));
+        activityRecords.push(...incoming.filter(event => !known.has(Number(event.id))));
+      }
+      if (incoming.length) activityCursor = Math.max(activityCursor, ...incoming.map(event => Number(event.id) || 0));
+      activityRecords = activityRecords.slice(-500);
+      const select = $('#activityPlayer');
+      const selected = select.value;
+      const names = [...new Set(activityRecords.map(event => event.player).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+      select.replaceChildren(new Option('Todos os jogadores', ''));
+      names.forEach(name => select.add(new Option(name, name)));
+      select.value = names.includes(selected) ? selected : '';
+      $('#activityUpdated').textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
+      renderPlayerEvents();
+    } catch (error) {
+      if (error.status !== 401) $('#activityUpdated').textContent = `Falha ao atualizar: ${error.message}`;
+      if (error.status === 401) window.location.reload();
+    } finally { activityLoading = false; }
+  }
+  $('#activityPlayer')?.addEventListener('change', renderPlayerEvents);
+  $('#activityRefresh')?.addEventListener('click', () => loadPlayerEvents(activityRecords.length === 0));
+
   async function initializeConsole() {
     await Promise.all([loadCatalog(), refreshStatus(), loadHistory(true)]);
     if (pollTimer) window.clearInterval(pollTimer);
+    if (activityPollTimer) window.clearInterval(activityPollTimer);
     pollTimer = window.setInterval(() => refreshStatus(false), 15000);
+    activityPollTimer = window.setInterval(() => {
+      if ($('#view-activity')?.classList.contains('active')) loadPlayerEvents(activityRecords.length === 0);
+    }, 5000);
   }
 
   if (!loginScreen.hidden) loadCsrf();

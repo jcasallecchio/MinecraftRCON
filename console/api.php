@@ -109,6 +109,17 @@ if ($action === 'status') {
     ]);
 }
 
+if ($action === 'events') {
+    reject_method('GET');
+    $after = max(0, (int)($_GET['after'] ?? 0));
+    $limit = max(1, min(200, (int)($_GET['limit'] ?? 100)));
+    $result = bedrock_request('/api/v1/events?after=' . $after . '&limit=' . $limit);
+    if (!$result['ok']) {
+        bedrock_failure($result);
+    }
+    json_response($result['data']);
+}
+
 if ($action === 'command') {
     reject_method('POST');
     $payload = read_payload();
