@@ -1,0 +1,7 @@
+Options -Indexes
+RewriteEngine On
+RewriteRule ^(?:[.]git|storage|tools)(?:/|$) - [F,L,NC]
+
+<FilesMatch "(?i)^(?:[.]|bootstrap[.]php$|README[.]md$)|[.](?:sqlite3?|db|log|jsonl)(?:$|[.])">
+  Require all denied
+</FilesMatch>

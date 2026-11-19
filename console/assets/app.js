@@ -1,0 +1,516 @@
+(() => {
+  'use strict';
+
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  const loginScreen = $('#loginScreen');
+  const appShell = $('#appShell');
+  const csrfMeta = $('meta[name="csrf-token"]');
+  let csrf = csrfMeta?.content || '';
+  let catalog = { commands: [], selectors: [] };
+  let activeCategory = 'Todos';
+  let historyRecords = [];
+  let historyCursor = 0;
+  let commandHistory = [];
+  let historyPointer = 0;
+  let selectedSuggestion = -1;
+  let lastTelemetry = null;
+  let pollTimer = null;
+
+  const glossary = [
+    { term: 'Alvo', tag: 'Sintaxe', description: 'Jogador, entidade ou seletor escolhido para receber a ação de um comando.' },
+    { term: 'Seletor', tag: 'Sintaxe', description: '@a todos os jogadores · @e entidades · @p jogador próximo · @r aleatório · @s executor.' },
+    { term: 'Coordenadas', tag: 'Mundo', description: 'X, Y e Z indicam posição. O til (~) representa uma posição relativa ao executor.' },
+    { term: 'Cheats', tag: 'Permissão', description: 'Vários comandos de administração e edição exigem cheats habilitados no mundo.' },
+    { term: 'Operador (OP)', tag: 'Permissão', description: 'Jogador com privilégios elevados dentro do Minecraft. Concedido com op e removido com deop.' },
+    { term: 'Allowlist', tag: 'Servidor', description: 'Lista de jogadores autorizados a entrar. Também é conhecida como whitelist.' },
+    { term: 'Gamemode', tag: 'Mundo', description: 'Modo de jogo: survival, creative, adventure ou spectator, conforme a versão.' },
+    { term: 'NBT / componentes', tag: 'Itens', description: 'Dados e componentes opcionais usados por alguns comandos para personalizar itens e entidades.' },
+    { term: 'Função', tag: 'Pacotes', description: 'Arquivo de comandos de um pacote de comportamento executado com function.' },
+    { term: 'Tick', tag: 'Desempenho', description: 'Unidade de atualização do mundo. Um segundo normal corresponde a 20 ticks.' },
+    { term: 'Console nativo', tag: 'Integração', description: 'A entrada do servidor Bedrock recebe comandos sem a barra inicial; o MineDev remove uma barra opcional.' },
+    { term: 'API v1', tag: 'Integração', description: 'Contrato de comunicação versionado entre este console e o add-on Bedrock.' }
+  ];
+
+  function setCsrf(value) {
+    if (!value) return;
+    csrf = value;
+    if (csrfMeta) csrfMeta.content = value;
+  }
+
+  async function api(action, options = {}) {
+    const method = options.method || 'GET';
+    const headers = { Accept: 'application/json' };
+    if (method !== 'GET') headers['X-CSRF-Token'] = csrf;
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    const response = await fetch(`api.php?action=${encodeURIComponent(action)}${options.query ? `&${options.query}` : ''}`, {
+      method,
+      credentials: 'same-origin',
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      cache: 'no-store'
+    });
+    const contentType = response.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json') ? await response.json() : {};
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || payload?.message || `Falha HTTP ${response.status}`);
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
+    }
+    return payload;
+  }
+
+  function toast(message, type = '') {
+    const region = $('#toastRegion');
+    const item = document.createElement('div');
+    item.className = `toast ${type}`.trim();
+    item.textContent = message;
+    region.append(item);
+    window.setTimeout(() => item.remove(), 4200);
+  }
+
+  function setAuthenticated(username, token) {
+    setCsrf(token);
+    $('#userBadge').textContent = (username || 'AD').slice(0, 2).toUpperCase();
+    loginScreen.hidden = true;
+    appShell.hidden = false;
+    document.body.classList.remove('guest');
+    document.body.classList.add('authenticated');
+    $('#commandInput').focus();
+    initializeConsole();
+  }
+
+  async function loadCsrf() {
+    try {
+      const payload = await api('csrf');
+      setCsrf(payload.csrf);
+    } catch (_) {
+      // The page still displays a useful login error if the server is unavailable.
+    }
+  }
+
+  $('#togglePassword')?.addEventListener('click', () => {
+    const input = $('#password');
+    input.type = input.type === 'password' ? 'text' : 'password';
+    $('#togglePassword').setAttribute('aria-label', input.type === 'password' ? 'Mostrar senha' : 'Ocultar senha');
+  });
+
+  $('#loginForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = $('.login-submit');
+    const errorBox = $('#loginError');
+    errorBox.textContent = '';
+    button.disabled = true;
+    button.querySelector('span').textContent = 'Validando acesso…';
+    try {
+      if (!csrf) await loadCsrf();
+      const payload = await api('login', {
+        method: 'POST',
+        body: { username: $('#username').value.trim(), password: $('#password').value, csrf }
+      });
+      $('#password').value = '';
+      setAuthenticated(payload.username, payload.csrf);
+    } catch (error) {
+      errorBox.textContent = error.message || 'Não foi possível iniciar a sessão.';
+    } finally {
+      button.disabled = false;
+      button.querySelector('span').textContent = 'Entrar no console';
+    }
+  });
+
+  $('#logoutButton')?.addEventListener('click', async () => {
+    try { await api('logout', { method: 'POST', body: {} }); } catch (_) { /* session may already have expired */ }
+    window.location.reload();
+  });
+
+  function switchTab(name) {
+    $$('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === name));
+    $$('.view').forEach(view => view.classList.toggle('active', view.dataset.view === name));
+    const titles = { console: 'Visão geral', commands: 'Referência', history: 'Histórico' };
+    $('#pageTitle').textContent = titles[name] || 'Visão geral';
+    if (name === 'history' && historyRecords.length === 0) loadHistory(true);
+    if (name === 'console') $('#commandInput').focus();
+  }
+  $$('.tab').forEach(tab => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
+
+  function formatUptime(seconds) {
+    if (seconds === null || seconds === undefined) return '—';
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return days ? `${days}d ${hours}h ${minutes}m` : `${hours}h ${minutes}m`;
+  }
+  function formatBytes(value) {
+    if (value === null || value === undefined) return '—';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let amount = Number(value), index = 0;
+    while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index += 1; }
+    return `${amount.toFixed(index ? 1 : 0)} ${units[index]}`;
+  }
+
+  function setConnection(connected, label) {
+    const pill = $('#connectionPill');
+    pill.classList.toggle('connected', connected);
+    pill.classList.toggle('disconnected', !connected);
+    $('#connectionText').textContent = label;
+    $('#mobileStatusDot').style.background = connected ? 'var(--green)' : 'var(--red)';
+    $('#railStatusDot').style.background = connected ? 'var(--green)' : 'var(--red)';
+  }
+
+  async function refreshStatus(showToast = false) {
+    try {
+      const state = await api('status');
+      lastTelemetry = state.telemetry || null;
+      const configured = !!state.configured;
+      const server = state.telemetry?.server || {};
+      const running = state.ok && server.status === 'running';
+      const label = running ? 'Bedrock online' : server.status === 'maintenance' ? 'Manutenção' : configured ? 'Sem conexão' : 'Token pendente';
+      setConnection(running, label);
+      $('#mobileServerName').textContent = server.world_name || 'Bedrock';
+      $('#mobilePlayerCount').textContent = state.telemetry?.players?.online_count === null || state.telemetry?.players?.online_count === undefined
+        ? '— / — online'
+        : `${state.telemetry.players.online_count} / ${state.telemetry.players.max_count ?? '—'} online`;
+      $('#worldName').textContent = server.world_name || '—';
+      $('#serverVersion').textContent = server.version || '—';
+      $('#onlineCount').textContent = server.status === 'offline' ? '0' : (state.telemetry?.players?.online_count ?? '—');
+      $('#maxCount').textContent = state.telemetry?.players?.max_count ?? server.max_players ?? '—';
+      $('#gameMode').textContent = `Modo ${server.game_mode || '—'}`;
+      $('#difficulty').textContent = `Dificuldade ${server.difficulty || '—'}`;
+      $('#uptimeValue').textContent = formatUptime(server.uptime_seconds);
+      const memoryValue = formatBytes(state.telemetry?.performance?.bedrock_memory_bytes);
+      $('#memoryValue').textContent = memoryValue;
+      $('#mobileMemoryValue').textContent = memoryValue;
+      const players = state.telemetry?.players;
+      const playerList = $('#playerList');
+      playerList.replaceChildren();
+      if (Array.isArray(players?.names) && players.names.length) {
+        players.names.forEach(name => {
+          const chip = document.createElement('span'); chip.className = 'player-chip'; chip.textContent = name; playerList.append(chip);
+        });
+      } else {
+        const hint = document.createElement('span'); hint.className = 'muted';
+        hint.textContent = players?.stale ? 'Aguardando amostra atualizada' : 'Nenhum jogador online';
+        playerList.append(hint);
+      }
+      const canCommand = running;
+      $('#commandInput').disabled = !canCommand;
+      $('#sendButton').disabled = !canCommand;
+      $('#connectionHint').textContent = running
+        ? (players?.stale ? 'Telemetria de jogadores atualizando…' : `Amostra de jogadores: ${players?.sample_age_seconds ?? 0}s`)
+        : (state.connection_error || 'Servidor Bedrock indisponível');
+      $('#connectionHint').title = $('#connectionHint').textContent;
+      if (showToast) toast(running ? 'Telemetria atualizada.' : label, running ? '' : 'error');
+    } catch (error) {
+      lastTelemetry = null;
+      setConnection(false, error.status === 401 ? 'Sessão expirada' : 'API indisponível');
+      $('#commandInput').disabled = true;
+      $('#sendButton').disabled = true;
+      $('#connectionHint').textContent = error.message;
+      if (error.status === 401) window.location.reload();
+      if (showToast) toast(error.message, 'error');
+    }
+  }
+
+  async function loadCatalog() {
+    try {
+      catalog = await api('catalog');
+      renderCategories();
+      renderCommands();
+      renderGlossary();
+    } catch (error) { toast(`Catálogo: ${error.message}`, 'error'); }
+  }
+
+  function renderCategories() {
+    const categories = ['Todos', ...new Set((catalog.commands || []).map(command => command.category))];
+    const container = $('#categoryFilters'); container.replaceChildren();
+    categories.forEach(category => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = `filter-chip${activeCategory === category ? ' active' : ''}`;
+      button.textContent = category; button.addEventListener('click', () => { activeCategory = category; renderCategories(); renderCommands(); });
+      container.append(button);
+    });
+  }
+
+  function renderCommands() {
+    const search = ($('#catalogSearch')?.value || '').trim().toLowerCase();
+    const commands = (catalog.commands || []).filter(command => {
+      const inCategory = activeCategory === 'Todos' || command.category === activeCategory;
+      const query = `${command.name} ${command.description} ${command.syntax} ${command.category}`.toLowerCase();
+      return inCategory && (!search || query.includes(search));
+    });
+    const grid = $('#commandGrid'); grid.replaceChildren();
+    if (!commands.length) { grid.innerHTML = '<div class="empty-state">Nenhum comando encontrado.</div>'; return; }
+    commands.forEach(command => {
+      const card = document.createElement('button'); card.type = 'button'; card.className = 'command-card';
+      const head = document.createElement('div'); head.className = 'command-card-head';
+      const name = document.createElement('span'); name.className = 'command-card-name'; name.textContent = `/${command.name}`;
+      const category = document.createElement('span'); category.className = 'category-pill'; category.textContent = command.category;
+      head.append(name, category);
+      const description = document.createElement('p'); description.textContent = command.description;
+      const syntax = document.createElement('div'); syntax.className = 'command-meta'; syntax.textContent = command.syntax;
+      const example = document.createElement('div'); example.className = 'command-meta command-example'; example.textContent = `Ex.: ${commandExample(command)}`;
+      card.append(head, description, syntax, example);
+      card.addEventListener('click', () => {
+        switchTab('console'); $('#commandInput').value = `/${command.name} `; hideSuggestions(); $('#commandInput').focus(); showSuggestions();
+      });
+      grid.append(card);
+    });
+  }
+  $('#catalogSearch')?.addEventListener('input', renderCommands);
+
+  function renderGlossary() {
+    const query = ($('#glossarySearch')?.value || '').trim().toLowerCase();
+    const items = glossary.filter(item => `${item.term} ${item.description} ${item.tag}`.toLowerCase().includes(query));
+    const grid = $('#glossaryGrid'); grid.replaceChildren();
+    items.forEach(item => {
+      const card = document.createElement('article'); card.className = 'glossary-item';
+      const title = document.createElement('strong'); title.textContent = item.term;
+      const description = document.createElement('p'); description.textContent = item.description;
+      const tag = document.createElement('span'); tag.className = 'glossary-tag'; tag.textContent = item.tag;
+      card.append(title, description, tag); grid.append(card);
+    });
+  }
+  $('#glossarySearch')?.addEventListener('input', renderGlossary);
+
+  function lineTime() { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
+  function appendTerminal(text, type = 'result', marker = '·') {
+    const output = $('#terminalOutput');
+    const line = document.createElement('div'); line.className = `terminal-line ${type}`;
+    const time = document.createElement('span'); time.className = 'line-time'; time.textContent = lineTime();
+    const bullet = document.createElement('span'); bullet.className = 'line-marker'; bullet.textContent = marker;
+    const value = document.createElement('span'); value.textContent = String(text);
+    line.append(time, bullet, value); output.append(line); output.scrollTop = output.scrollHeight;
+  }
+  function hideSuggestions() { $('#suggestions').hidden = true; selectedSuggestion = -1; }
+
+  const commonArgs = {
+    gamemode: ['survival', 'creative', 'adventure', 'spectator'], difficulty: ['peaceful', 'easy', 'normal', 'hard'],
+    weather: ['clear', 'rain', 'thunder'], time: ['set day', 'set night', 'set noon', 'set midnight', 'query daytime', 'query gametime'],
+    daylock: ['true', 'false'], alwaysday: ['true', 'false'], mobevent: ['minecraft:pillager_patrols_event', 'minecraft:wandering_trader_event'],
+    camerashake: ['add', 'stop'], permission: ['reload'], save: ['hold', 'resume', 'query', 'hold resume'],
+    effect: ['clear'], allowlist: ['add', 'remove', 'list', 'reload'], whitelist: ['add', 'remove', 'list'],
+    gamerule: ['doDaylightCycle', 'keepInventory', 'mobGriefing', 'doMobSpawning', 'doWeatherCycle', 'showcoordinates'],
+    execute: ['as', 'at', 'if', 'unless', 'run'], scoreboard: ['objectives', 'players'], tickingarea: ['add', 'remove', 'remove_all', 'list']
+  };
+  const commonItems = ['diamond', 'minecraft:diamond', 'stone', 'dirt', 'iron_ingot', 'gold_ingot', 'emerald', 'netherite_ingot', 'diamond_sword', 'diamond_pickaxe', 'apple', 'bread', 'torch', 'oak_planks', 'glass', 'command_block'];
+  const commonEntities = ['minecraft:zombie', 'minecraft:skeleton', 'minecraft:creeper', 'minecraft:villager', 'minecraft:warden', 'minecraft:ender_dragon', 'minecraft:iron_golem', 'minecraft:horse'];
+
+  function commandExample(command) {
+    const name = command.name;
+    const selector = (catalog.selectors || []).find(item => item.value === '@p')?.value || '@p';
+    const item = commonItems[0] || 'diamond';
+    const examples = {
+      give: `${selector} ${item} 10`, time: commonArgs.time.find(value => value === 'query daytime') || 'query daytime',
+      gamemode: `survival ${selector}`, difficulty: 'normal', weather: 'clear',
+      effect: `${selector} clear`, teleport: `${selector} 0 64 0`, tp: `${selector} 0 64 0`,
+      summon: `${commonEntities[0]} 0 64 0`, say: 'Olá mundo', list: '', help: '',
+      allowlist: 'list', whitelist: 'list',
+    };
+    if (Object.prototype.hasOwnProperty.call(examples, name)) return `/${name}${examples[name] ? ` ${examples[name]}` : ''}`;
+
+    const args = (command.syntax || '').slice(name.length).match(/<[^>]+>|[^\s<>\[\]]+|\.\.\./g) || [];
+    const values = [];
+    for (const token of args) {
+      if (token === '...') break;
+      if (!token.startsWith('<')) { values.push(token); continue; }
+      const argument = token.slice(1, -1).toLowerCase();
+      if (argument.includes('|')) {
+        const choices = argument.split('|');
+        values.push((commonArgs[name] || []).find(value => choices.includes(value)) || choices.find(value => ['list', 'query'].includes(value)) || choices[0]);
+      } else if (/player|target|victim|selector/.test(argument)) values.push(selector);
+      else if (/item/.test(argument)) values.push(item);
+      else if (/block/.test(argument)) values.push('stone');
+      else if (/begin|end|destination|position|coordinate|location/.test(argument)) values.push('0 64 0');
+      else if (/entity|mob/.test(argument)) values.push(commonEntities[0] || 'minecraft:zombie');
+      else if (/mode/.test(argument)) values.push('survival');
+      else if (/difficulty/.test(argument)) values.push('normal');
+      else if (/weather/.test(argument)) values.push('clear');
+      else if (/effect/.test(argument)) values.push('speed');
+      else if (/amount|count|seconds|duration|level|radius|distance|number|value/.test(argument)) values.push('10');
+      else if (/true|false|bool|enable/.test(argument)) values.push('true');
+      else if (/rule/.test(argument)) values.push('keepInventory');
+      else if (/message|text|reason|title/.test(argument)) values.push('Olá mundo');
+      else if (/time/.test(argument)) values.push('day');
+      else values.push('example');
+    }
+    return `/${name}${values.length ? ` ${values.join(' ')}` : ''}`;
+  }
+
+  function argumentSuggestions(value) {
+    const input = value.replace(/^\//, '');
+    const parts = input.split(/\s+/);
+    const name = (parts[0] || '').toLowerCase();
+    const trailingSpace = /\s$/.test(input);
+    const argumentIndex = trailingSpace ? parts.length : parts.length - 1;
+    const partial = trailingSpace ? '' : (parts[parts.length - 1] || '').toLowerCase();
+    const players = (lastTelemetry?.players?.names || []).map(player => ({ value: player, label: 'jogador online', kind: 'argument' }));
+    const selectors = (catalog.selectors || []).map(item => ({ value: item.value, label: item.label, kind: 'argument' }));
+    let candidates = [];
+    if (argumentIndex === 0) return [];
+    if (['give', 'clear', 'kick', 'op', 'deop', 'teleport', 'tp', 'effect', 'xp', 'tell', 'msg', 'w', 'spawnpoint', 'kill', 'tag', 'permission'].includes(name) && argumentIndex === 1) candidates = [...players, ...selectors];
+    else if (name === 'give' && argumentIndex === 2) candidates = commonItems.map(value => ({ value, label: 'item', kind: 'argument' }));
+    else if (name === 'gamemode' && argumentIndex === 1) candidates = commonArgs.gamemode.map(value => ({ value, label: 'modo', kind: 'argument' }));
+    else if (name === 'gamemode' && argumentIndex === 2) candidates = [...players, ...selectors];
+    else if (name === 'difficulty' && argumentIndex === 1) candidates = commonArgs.difficulty.map(value => ({ value, label: 'dificuldade', kind: 'argument' }));
+    else if (name === 'weather' && argumentIndex === 1) candidates = commonArgs.weather.map(value => ({ value, label: 'clima', kind: 'argument' }));
+    else if (name === 'summon' && argumentIndex === 1) candidates = commonEntities.map(value => ({ value, label: 'entidade', kind: 'argument' }));
+    else if (commonArgs[name] && argumentIndex <= 2) candidates = commonArgs[name].map(value => ({ value, label: 'opção', kind: 'argument' }));
+    else if (['tell', 'msg', 'w', 'say', 'me'].includes(name) && argumentIndex >= 2) return [];
+    return candidates.filter(item => item.value.toLowerCase().startsWith(partial));
+  }
+
+  function currentSuggestions() {
+    const value = $('#commandInput').value;
+    if (!value.trim()) return [];
+    const normalized = value.trimStart().replace(/^\//, '');
+    if (!/\s/.test(normalized)) {
+      const query = normalized.toLowerCase();
+      return (catalog.commands || []).filter(command => command.name.toLowerCase().startsWith(query)).slice(0, 10)
+        .map(command => ({ value: command.name, label: command.description, syntax: command.syntax, example: commandExample(command), kind: 'command' }));
+    }
+    return argumentSuggestions(value).slice(0, 10).map(item => ({ ...item, syntax: item.label }));
+  }
+
+  function showSuggestions() {
+    const box = $('#suggestions'); const input = $('#commandInput');
+    const options = currentSuggestions(); box.replaceChildren();
+    if (!options.length || input.disabled) { hideSuggestions(); return; }
+    options.forEach((option, index) => {
+      const button = document.createElement('button'); button.type = 'button';
+      button.className = `suggestion-item${option.kind === 'command' ? ' command-suggestion' : ''}${selectedSuggestion === index ? ' selected' : ''}`;
+      const name = document.createElement('span'); name.className = 'suggestion-name'; name.textContent = option.kind === 'command' ? `/${option.value}` : option.value;
+      const description = document.createElement('span'); description.className = 'suggestion-desc'; description.textContent = option.label || '';
+      const syntax = document.createElement('span'); syntax.className = 'suggestion-syntax'; syntax.textContent = option.syntax || '';
+      button.append(name, description, syntax);
+      if (option.kind === 'command' && option.example) {
+        const example = document.createElement('span'); example.className = 'suggestion-example'; example.textContent = `Ex.: ${option.example}`;
+        button.append(example);
+      }
+      button.addEventListener('mousedown', event => { event.preventDefault(); chooseSuggestion(option); });
+      box.append(button);
+    });
+    box.hidden = false;
+  }
+
+  function chooseSuggestion(option) {
+    const input = $('#commandInput');
+    const original = input.value;
+    if (option.kind === 'command') {
+      const prefix = original.trimStart().startsWith('/') ? '/' : '';
+      input.value = `${prefix}${option.value} `;
+    } else {
+      const endsWithSpace = /\s$/.test(original);
+      const next = endsWithSpace ? `${original}${option.value} ` : original.replace(/\S+$/, `${option.value} `);
+      input.value = next;
+    }
+    hideSuggestions(); input.focus();
+  }
+
+  $('#commandInput')?.addEventListener('input', () => { selectedSuggestion = -1; showSuggestions(); });
+  $('#commandInput')?.addEventListener('keydown', event => {
+    const options = currentSuggestions();
+    if (options.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault();
+      selectedSuggestion = event.key === 'ArrowDown'
+        ? (selectedSuggestion + 1) % options.length
+        : (selectedSuggestion <= 0 ? options.length - 1 : selectedSuggestion - 1);
+      showSuggestions(); return;
+    }
+    if (options.length && (event.key === 'Tab' || (event.key === 'Enter' && selectedSuggestion >= 0))) {
+      event.preventDefault(); chooseSuggestion(options[selectedSuggestion >= 0 ? selectedSuggestion : 0]); return;
+    }
+    if (event.key === 'Escape') { hideSuggestions(); return; }
+    if (event.key === 'ArrowUp' && !$('#suggestions').hidden) return;
+    if (event.key === 'ArrowUp' && commandHistory.length) {
+      event.preventDefault(); historyPointer = Math.max(0, historyPointer - 1); event.currentTarget.value = commandHistory[historyPointer] || ''; showSuggestions();
+    } else if (event.key === 'ArrowDown' && commandHistory.length) {
+      event.preventDefault(); historyPointer = Math.min(commandHistory.length, historyPointer + 1); event.currentTarget.value = commandHistory[historyPointer] || ''; showSuggestions();
+    }
+  });
+  $('#commandInput')?.addEventListener('blur', () => window.setTimeout(hideSuggestions, 140));
+
+  async function executeCommand(rawCommand) {
+    const command = rawCommand.trim();
+    if (!command) return;
+    $('#commandInput').value = ''; hideSuggestions();
+    commandHistory.push(command); historyPointer = commandHistory.length;
+    appendTerminal(command, 'command', '›');
+    $('#sendButton').disabled = true;
+    try {
+      const result = await api('command', { method: 'POST', body: { command } });
+      (result.console_output || []).forEach(line => appendTerminal(line, 'result'));
+      if (!result.console_output?.length) appendTerminal(result.message || 'Comando enviado; a API não confirmou a execução específica.', result.execution_confirmed ? 'result' : 'warning');
+      if (result.execution_confirmed) appendTerminal('Execução confirmada pelo servidor.', 'system', '✓');
+      await loadHistory(true);
+    } catch (error) {
+      appendTerminal(error.message, 'error', '!');
+      toast(error.message, 'error');
+      await loadHistory(true);
+    } finally {
+      $('#sendButton').disabled = !lastTelemetry || lastTelemetry.server?.status !== 'running';
+      $('#commandInput').focus();
+    }
+  }
+  $('#commandForm')?.addEventListener('submit', event => { event.preventDefault(); executeCommand($('#commandInput').value); });
+  $('#helpButton')?.addEventListener('click', () => executeCommand('help'));
+  $('#clearTerminal')?.addEventListener('click', () => {
+    $('#terminalOutput').replaceChildren();
+    appendTerminal('Tela limpa. Os registros permanentes continuam no Histórico.', 'system', '◆');
+  });
+  $$('.quick-command').forEach(button => button.addEventListener('click', () => executeCommand(button.dataset.command || '')));
+  $('#refreshButton')?.addEventListener('click', () => refreshStatus(true));
+
+  function renderHistory() {
+    const query = ($('#historySearch')?.value || '').trim().toLowerCase();
+    const list = $('#historyList'); list.replaceChildren();
+    const records = historyRecords.filter(item => `${item.actor} ${item.event_type} ${item.command} ${item.status} ${item.detail}`.toLowerCase().includes(query));
+    if (!records.length) {
+      const empty = document.createElement('div'); empty.className = 'empty-state';
+      empty.textContent = historyRecords.length ? 'Nenhum registro corresponde à busca.' : 'Ainda não há registros no período de retenção.';
+      list.append(empty); $('#historyMore').hidden = true; return;
+    }
+    records.forEach(item => {
+      const card = document.createElement('article'); card.className = 'history-item';
+      const head = document.createElement('div'); head.className = 'history-head';
+      const icon = document.createElement('span'); icon.className = 'history-type-icon'; icon.textContent = item.event_type === 'command' ? '›' : item.event_type === 'login' ? '↗' : '·';
+      const command = document.createElement('code'); command.className = 'history-command'; command.textContent = item.command ? `/${item.command}` : item.event_type;
+      const meta = document.createElement('div'); meta.className = 'history-meta';
+      const date = document.createElement('time'); date.dateTime = new Date(Number(item.created_at) * 1000).toISOString(); date.textContent = new Date(Number(item.created_at) * 1000).toLocaleString('pt-BR');
+      const status = document.createElement('span'); status.className = `history-status ${item.status}`; status.textContent = item.status;
+      meta.append(date, status); head.append(icon, command, meta); card.append(head);
+      if (item.detail) { const detail = document.createElement('div'); detail.className = 'history-detail'; detail.textContent = item.detail; card.append(detail); }
+      list.append(card);
+    });
+    $('#historyMore').hidden = historyRecords.length < 60 || !historyCursor;
+  }
+
+  async function loadHistory(reset = false) {
+    try {
+      const query = reset || !historyCursor ? 'limit=60' : `limit=60&before=${historyCursor}`;
+      const payload = await api('history', { query });
+      if (reset) historyRecords = [];
+      const incoming = payload.events || [];
+      if (incoming.length) {
+        historyCursor = Number(incoming[incoming.length - 1].id);
+        historyRecords = reset ? incoming : [...historyRecords, ...incoming];
+      } else if (reset) historyCursor = 0;
+      renderHistory();
+    } catch (error) { if (error.status !== 401) toast(`Histórico: ${error.message}`, 'error'); }
+  }
+  $('#historyRefresh')?.addEventListener('click', () => loadHistory(true));
+  $('#historyMore')?.addEventListener('click', () => loadHistory(false));
+  $('#historySearch')?.addEventListener('input', renderHistory);
+
+  async function initializeConsole() {
+    await Promise.all([loadCatalog(), refreshStatus(), loadHistory(true)]);
+    if (pollTimer) window.clearInterval(pollTimer);
+    pollTimer = window.setInterval(() => refreshStatus(false), 15000);
+  }
+
+  if (!loginScreen.hidden) loadCsrf();
+  if (appShell && !appShell.hidden) {
+    $('#userBadge').textContent = ($('#username')?.value || 'AD').slice(0, 2).toUpperCase();
+    initializeConsole();
+  }
+})();

@@ -1,0 +1,91 @@
+# MineDev Console
+
+Painel web do MinecraftRCON para administrar um servidor **Minecraft Bedrock Edition**. Mostra jogadores, mundo, versão, memória do processo e tempo de atividade. Permite enviar comandos com sugestões, consultar o catálogo e exportar o histórico de auditoria. O painel funciona no computador e no celular.
+
+O navegador acessa o painel pelo Apache. O PHP chama a API do add-on na rede de confiança, na porta `19133/TCP`, com o token configurado no servidor web.
+
+## Requisitos
+
+- [Bedrock Server with RCON](../MinecraftRCON/DOCS.md) versão **1.5.0 ou posterior**, com a API v1 acessível a partir do servidor web.
+- Apache 2.4 com PHP, `mod_rewrite` e suporte a `.htaccess` para a pasta do console. [Configuração de .htaccess no Apache](https://httpd.apache.org/docs/2.4/howto/htaccess.html)
+- PHP 8.2 ou mais recente, em uma versão que ainda receba correções de segurança. Habilite `curl` no PHP usado pelo Apache e tenha o PHP de linha de comando disponível para a configuração inicial. [Versões mantidas do PHP](https://www.php.net/supported-versions.php) · [Extensão cURL](https://www.php.net/manual/en/book.curl.php)
+
+## 1. Instale os arquivos do console
+
+Baixe ou clone o repositório fora da raiz pública do Apache. Copie **o conteúdo da pasta `console/`**, incluindo os arquivos ocultos, para a pasta `minedev/` da hospedagem. Em um servidor com `/var/www/html` como raiz, a instalação terá esta estrutura.
+
+~~~text
+/var/www/html/minedev/
+├── .env.example
+├── .htaccess
+├── api.php
+├── bootstrap.php
+├── index.php
+├── assets/
+├── storage/
+└── tools/
+~~~
+
+Configure o Apache para interpretar PHP e ler o `.htaccess` da pasta. Adicione um bloco como este à configuração do site no Apache.
+
+~~~apache
+<Directory "/var/www/html/minedev">
+    Options +FollowSymLinks
+    AllowOverride AuthConfig FileInfo Options
+    DirectoryIndex index.php
+</Directory>
+~~~
+
+Ajuste o caminho à sua instalação. No XAMPP, a pasta costuma ficar em `htdocs/minedev`. Habilite `mod_rewrite` e recarregue o Apache após editar a configuração. As regras fornecidas bloqueiam o acesso HTTP a configurações, logs e ferramentas. Antes de criar o `.env`, abra `/minedev/.env.example` e `/minedev/tools/initialize.php` a partir da rede que usará o painel. Confirme que o Apache retorna **403** nos dois endereços. [Requisitos do mod_rewrite em .htaccess](https://httpd.apache.org/docs/2.4/pt-br/rewrite/htaccess.html)
+
+## 2. Crie o login e conecte ao Bedrock
+
+Na pasta instalada do console, execute este comando no terminal.
+
+~~~sh
+php tools/initialize.php
+~~~
+
+O instalador cria o `.env` local e mostra o usuário inicial `admin` e uma senha aleatória. Guarde essa senha no seu gerenciador de senhas. O arquivo guarda somente o hash da senha e o instalador preserva um `.env` existente. No Windows, se `php` não estiver no PATH, use o caminho do executável, por exemplo `C:\xampp\php\php.exe`.
+
+Abra o `.env` em um editor e preencha as duas opções abaixo. Troque o IP de exemplo pelo endereço local do Home Assistant. Em `BEDROCK_API_TOKEN`, copie o mesmo valor de `rcon_token` da aba **Configuração** do add-on.
+
+~~~dotenv
+BEDROCK_API_URL=http://192.168.1.50:19133
+BEDROCK_API_TOKEN=SEU_TOKEN_DO_ADDON
+~~~
+
+Use a URL base da API de administração. A porta `19132` é a do jogo. Se o add-on usar `rcon_allowed_ips`, inclua o **IP de origem do servidor PHP** que faz a chamada, inclusive se ele estiver em um contêiner.
+
+O processo PHP precisa conseguir ler `.env` e escrever em `storage/`. Em Linux com Apache/PHP usando `www-data`, use os comandos abaixo na pasta do console.
+
+~~~sh
+sudo chgrp www-data .env
+sudo chmod 0640 .env
+sudo sh tools/fix-storage-permissions.sh www-data www-data
+~~~
+
+Troque o usuário e o grupo se o seu serviço PHP usar outra conta. No Windows, aplique as permissões equivalentes na conta que executa o Apache. Preserve uma cópia privada do `.env` e dos logs se for migrar a instalação.
+
+Para trocar o usuário ou a senha, execute `php tools/set-login.php`. Se o PHP lê o `.env` pelo grupo em Linux, reaplique `chmod 0640 .env` após a troca. Os demais parâmetros são `APP_TIMEZONE` para o fuso do PHP e `LOG_RETENTION_DAYS` para a retenção do histórico, com padrão de **7 dias** e intervalo de 1 a 30. O navegador exibe o horário dos eventos no fuso do dispositivo.
+
+## 3. Use o painel
+
+1. Abra **/minedev/** no endereço do seu servidor web e entre com o usuário e a senha.
+2. Aguarde **Bedrock online**. Confira o mundo, o número de jogadores e a versão. Use o botão de atualização para consultar a telemetria imediatamente.
+3. Em **Console**, digite `list` e pressione **Enter** ou toque em **Enviar comando** para listar jogadores. Use **Tab** para preencher uma sugestão selecionada ou toque na sugestão no celular. Quando a lista de sugestões estiver fechada, **↑/↓** percorrem os comandos digitados na sessão.
+4. Em **Comandos & glossário**, pesquise comandos por nome, descrição ou categoria. Os comandos aceitos dependem da versão do Bedrock e das opções do mundo. [Referência de comandos do Bedrock](https://learn.microsoft.com/en-us/minecraft/creator/commands/commands?view=minecraft-bedrock-stable)
+5. Em **Histórico**, consulte os eventos mais recentes e use **Exportar CSV** para salvar o período disponível. **Limpar tela** limpa apenas o terminal. Os registros são salvos em `storage/`. Quando o painel é acessado, a limpeza periódica remove os eventos que passaram da retenção.
+
+A API confirma o envio ao console do Bedrock e pode retornar linhas recentes. Confira o efeito de um comando no jogo ou nos logs do add-on.
+
+## Acesso e solução de problemas
+
+Acesse o painel por HTTPS e restrinja a hospedagem à rede local ou à VPN. Mantenha `19133/TCP` fora do encaminhamento de portas da internet. Para uso com proxy HTTPS, configure o servidor PHP para reconhecer a conexão como HTTPS e emitir o cookie de sessão com `Secure`.
+
+| Sintoma | O que conferir |
+| --- | --- |
+| Página retorna HTTP 500 | Veja o log do Apache/PHP. Confirme que o `.env` foi criado, é legível pelo PHP e preserva `APP_SECRET` e o hash da senha. Verifique as permissões de `storage/` e se o Apache aceita as diretivas do `.htaccess`. |
+| A tela mostra **Token pendente** | Preencha `BEDROCK_API_TOKEN` com o token do add-on. |
+| O add-on retorna HTTP 401 ou 403 | Confira se os tokens são iguais e se `rcon_allowed_ips` permite o IP de origem do PHP. |
+| O painel mostra **Sem conexão** | A partir do host do PHP, substitua o endereço de exemplo e consulte `curl http://192.168.1.50:19133/health`. O retorno `{"status":"ready"}` indica que a API está respondendo e a sessão do Bedrock está ativa. Em caso de timeout, verifique endereço, rota e firewall. |

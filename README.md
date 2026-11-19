@@ -4,7 +4,7 @@
 
 <h1 align="center">MinecraftRCON</h1>
 
-<p align="center">Servidor dedicado de Minecraft Bedrock para Home Assistant OS, com API de administração e backups do mundo.</p>
+<p align="center">Servidor dedicado de Minecraft Bedrock para Home Assistant OS, com painel web de administração e backups do mundo.</p>
 
 <p align="center">
   <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fjcasallecchio%2FMinecraftRCON"><img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Adicionar repositório ao Home Assistant"></a>
@@ -14,7 +14,8 @@
 
 - **Servidor Bedrock com NetherNet.** Jogue na rede local ou configure o roteador para receber jogadores pela internet.
 - **Atualização na inicialização.** O add-on consulta a versão oficial do Bedrock e mantém a instalação existente se uma falha de download impedir a atualização.
-- **Comandos e telemetria.** A API HTTP permite enviar comandos ao console e consultar versão, jogadores, memória e tempo de atividade. Use-a para integrar um painel ou uma automação.
+- **Comandos e telemetria.** A API HTTP permite enviar comandos ao console e consultar versão, jogadores, memória e tempo de atividade.
+- **MineDev Console.** Painel web opcional para consultar a telemetria, enviar comandos com sugestões e exportar a auditoria.
 - **Backups do mundo.** Crie cópias programadas ou sob demanda, com retenção configurável e restauração autenticada.
 
 ## Instalação rápida
@@ -32,6 +33,7 @@ Se você já instalou o add-on pelo endereço antigo do repositório, continue u
 | --- | --- |
 | [Instalação e configuração](MinecraftRCON/DOCS.md) | Primeiro acesso, mundo existente, parâmetros do add-on, API e backups |
 | [Acesso pela internet](docs/acesso-remoto.md) | Encaminhamento TCP e UDP, DuckDNS, Cloudflare e teste no 4G/5G |
+| [MineDev Console](console/README.md) | Instalação do painel PHP, login, configuração do token, comandos e histórico |
 | [Histórico de versões](MinecraftRCON/CHANGELOG.md) | Mudanças por versão do add-on |
 
 > Para jogar fora de casa, libere somente as portas do jogo descritas no guia. Mantenha a API de administração (`19133/TCP`) na rede local ou em uma VPN.

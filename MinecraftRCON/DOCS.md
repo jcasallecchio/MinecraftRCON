@@ -75,6 +75,8 @@ Envie um comando por requisição, com até 1024 caracteres. A resposta inclui `
 
 Integrações podem usar `edition: "bedrock"` e `command_dialect: "minecraft-bedrock"` para identificar os comandos aceitos. A telemetria inclui `schema_version`, `collected_at`, `server`, `players` e `performance`. O log da API fica em `/share/minecraftRCON/rcon_commands.log` e é rotacionado a cada 2 MiB, com até cinco arquivos anteriores.
 
+Use o [MineDev Console](https://github.com/jcasallecchio/MinecraftRCON/tree/main/console) se preferir administrar o servidor por um painel web. O guia do painel explica como configurar o mesmo token da API e usar os comandos, a telemetria e o histórico.
+
 ## Backups, restauração e atualizações
 
 - Os backups programados e sob demanda ficam em `/share/minecraftRCON/backups/scheduled/`. Para copiar um mundo em execução, o add-on usa `save hold` e volta a permitir gravações após copiar os dados. Isso requer `allow-cheats=true`. Avalie o impacto nas conquistas antes de ativar cheats em um mundo existente. Consulte a [documentação do comando save](https://learn.microsoft.com/en-us/minecraft/creator/commands/commands/save?view=minecraft-bedrock-stable).
