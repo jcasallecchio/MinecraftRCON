@@ -24,6 +24,7 @@ SERVER_DIR = Path(os.environ.get("MINECRAFT_SERVER_DIR", "/share/minecraftRCON")
 LOG_FILE = os.environ.get("RCON_LOG_FILE", str(SERVER_DIR / "rcon_commands.log"))
 SERVER_LOG_FILE = SERVER_DIR / "server.log"
 PLAYER_EVENTS_FILE = SERVER_DIR / "player_events.jsonl"
+PLAYER_STATS_FILE = SERVER_DIR / "player_stats.json"
 BACKUP_DIR = SERVER_DIR / "backups" / "scheduled"
 MAINTENANCE_FILE = SERVER_DIR / ".maintenance"
 OPTIONS_FILE = os.environ.get("RCON_OPTIONS_FILE", "/data/options.json")
@@ -92,6 +93,7 @@ SCHEDULER_STOP = threading.Event()
 TELEMETRY_LOCK = threading.Lock()
 PLAYER_EVENTS_LOCK = threading.Lock()
 PLAYER_EVENTS_STOP = threading.Event()
+PLAYER_STATS_LOCK = threading.Lock()
 PLAYER_TELEMETRY = {
     "online_count": None,
     "max_count": None,
@@ -305,6 +307,7 @@ def _append_player_event(event_type, player, detail=""):
             temporary = PLAYER_EVENTS_FILE.with_suffix(".jsonl.tmp")
             temporary.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in events), encoding="utf-8")
             temporary.replace(PLAYER_EVENTS_FILE)
+            _record_player_stat_event(event)
         except OSError:
             app.logger.exception("Could not persist Bedrock player event")
 
@@ -325,6 +328,10 @@ def _parse_player_event(line):
 
 def player_events_scheduler():
     """Tail only new Bedrock log lines, keeping a bounded seven-day event feed."""
+    try:
+        get_player_stats()
+    except Exception:
+        app.logger.exception("Could not initialize Bedrock player statistics")
     offset = 0
     try:
         offset = SERVER_LOG_FILE.stat().st_size
@@ -369,6 +376,176 @@ def get_player_events(after=0, limit=100):
             pass
     events.sort(key=lambda item: int(item.get("id", 0)))
     return events[:limit] if after else events[-limit:]
+
+
+def _load_player_stats_unlocked():
+    try:
+        data = json.loads(PLAYER_STATS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("players"), dict):
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"schema_version": 1, "last_event_id": 0, "players": {}}
+
+
+def _save_player_stats_unlocked(stats):
+    PLAYER_STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = PLAYER_STATS_FILE.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(PLAYER_STATS_FILE)
+
+
+def _apply_player_stat_event(stats, event):
+    event_id = int(event.get("id", 0))
+    if event_id <= int(stats.get("last_event_id", 0)):
+        return False
+    name = str(event.get("player", "")).strip()
+    if not name:
+        stats["last_event_id"] = event_id
+        return True
+    players = stats.setdefault("players", {})
+    player = players.setdefault(name, {
+        "join_count": 0,
+        "leave_count": 0,
+        "death_count": 0,
+        "playtime_seconds": 0,
+        "first_seen": event.get("timestamp"),
+        "last_seen": event.get("timestamp"),
+        "last_join": None,
+        "online_since": None,
+    })
+    event_time = event_id / 1_000_000
+    player["last_seen"] = event.get("timestamp")
+    if event.get("type") == "join":
+        player["join_count"] = int(player.get("join_count", 0)) + 1
+        player["last_join"] = event.get("timestamp")
+        previous_session = player.get("online_since")
+        if previous_session is not None:
+            player["playtime_seconds"] = int(player.get("playtime_seconds", 0)) + max(0, int(event_time - float(previous_session)))
+        player["online_since"] = event_time
+    elif event.get("type") == "leave":
+        player["leave_count"] = int(player.get("leave_count", 0)) + 1
+        online_since = player.get("online_since")
+        if online_since is not None:
+            player["playtime_seconds"] = int(player.get("playtime_seconds", 0)) + max(0, int(event_time - float(online_since)))
+        player["online_since"] = None
+    elif event.get("type") == "death":
+        player["death_count"] = int(player.get("death_count", 0)) + 1
+    stats["last_event_id"] = event_id
+    return True
+
+
+def _record_player_stat_event(event):
+    with PLAYER_STATS_LOCK:
+        stats = _load_player_stats_unlocked()
+        if _apply_player_stat_event(stats, event):
+            try:
+                _save_player_stats_unlocked(stats)
+            except OSError:
+                app.logger.exception("Could not persist Bedrock player statistics")
+
+
+def _server_started_epoch():
+    try:
+        return float((SERVER_DIR / ".server_started_at").read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def get_player_stats():
+    running = find_screen_session("mc") is not None
+    with TELEMETRY_LOCK:
+        online_player_names = [str(name) for name in PLAYER_TELEMETRY.get("names", [])]
+        online_names = {name.casefold() for name in online_player_names}
+        sample_at = PLAYER_TELEMETRY.get("updated_at")
+    try:
+        sample_epoch = datetime.fromisoformat(sample_at).timestamp() if sample_at else None
+    except ValueError:
+        sample_epoch = None
+    now = time.time()
+    sample_fresh = sample_epoch is not None and now - sample_epoch <= TELEMETRY_INTERVAL_SECONDS * 3
+    server_started = _server_started_epoch() if running else None
+    events = []
+    with PLAYER_EVENTS_LOCK:
+        try:
+            for line in PLAYER_EVENTS_FILE.read_text(encoding="utf-8").splitlines():
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        except OSError:
+            pass
+        with PLAYER_STATS_LOCK:
+            stats = _load_player_stats_unlocked()
+            events.sort(key=lambda event: int(event.get("id", 0)))
+            changed = False
+            for event in events:
+                changed = _apply_player_stat_event(stats, event) or changed
+            if running and sample_fresh:
+                known_names = {name.casefold() for name in stats.get("players", {})}
+                sample_time = datetime.fromtimestamp(sample_epoch, timezone.utc).isoformat()
+                for name in online_player_names:
+                    if name.casefold() not in known_names:
+                        stats["players"][name] = {
+                            "join_count": 1,
+                            "leave_count": 0,
+                            "death_count": 0,
+                            "playtime_seconds": 0,
+                            "first_seen": sample_time,
+                            "last_seen": sample_time,
+                            "last_join": sample_time,
+                            "online_since": sample_epoch,
+                        }
+                        known_names.add(name.casefold())
+                        changed = True
+            for name, player in stats.get("players", {}).items():
+                online_since = player.get("online_since")
+                if online_since is not None and server_started is not None and server_started > float(online_since):
+                    player["playtime_seconds"] = int(player.get("playtime_seconds", 0)) + max(0, int(server_started - float(online_since)))
+                    player["online_since"] = None
+                    online_since = None
+                    changed = True
+                if not running or not sample_fresh:
+                    continue
+                seen_online = name.casefold() in online_names
+                if seen_online and online_since is None:
+                    player["join_count"] = int(player.get("join_count", 0)) + 1
+                    player["online_since"] = sample_epoch
+                    player["last_join"] = datetime.fromtimestamp(sample_epoch, timezone.utc).isoformat()
+                    player["last_seen"] = player["last_join"]
+                    changed = True
+                elif not seen_online and online_since is not None and sample_epoch > float(online_since):
+                    player["playtime_seconds"] = int(player.get("playtime_seconds", 0)) + max(0, int(sample_epoch - float(online_since)))
+                    player["online_since"] = None
+                    player["last_seen"] = datetime.fromtimestamp(sample_epoch, timezone.utc).isoformat()
+                    changed = True
+            if changed or not PLAYER_STATS_FILE.exists():
+                try:
+                    _save_player_stats_unlocked(stats)
+                except OSError:
+                    app.logger.exception("Could not initialize Bedrock player statistics")
+
+    if not running or not sample_fresh:
+        online_names.clear()
+    players = []
+    for name, player in stats.get("players", {}).items():
+        online_since = player.get("online_since")
+        is_online = name.casefold() in online_names
+        session_seconds = max(0, int(now - float(online_since))) if is_online and online_since is not None else 0
+        players.append({
+            "name": name,
+            "online": is_online,
+            "join_count": int(player.get("join_count", 0)),
+            "leave_count": int(player.get("leave_count", 0)),
+            "death_count": int(player.get("death_count", 0)),
+            "playtime_seconds": int(player.get("playtime_seconds", 0)) + session_seconds,
+            "current_session_seconds": session_seconds,
+            "first_seen": player.get("first_seen"),
+            "last_seen": player.get("last_seen"),
+            "last_join": player.get("last_join"),
+        })
+    players.sort(key=lambda player: (-player["playtime_seconds"], player["name"].casefold()))
+    return {"players": players, "tracked_players": len(players), "collected_at": datetime.now(timezone.utc).isoformat()}
 
 
 def _read_server_properties():
@@ -469,6 +646,7 @@ def api_info():
             "command_execution": {"method": "POST", "path": "/api/v1/commands", "body": {"command": "string"}},
             "telemetry": {"method": "GET", "path": "/api/v1/telemetry", "refresh_seconds": TELEMETRY_INTERVAL_SECONDS},
             "player_events": {"method": "GET", "path": "/api/v1/events", "retention_days": 7},
+            "player_statistics": {"method": "GET", "path": "/api/v1/player-stats", "metrics": ["playtime", "sessions", "deaths", "last_seen"]},
             "command_mode": "raw_console",
             "backups": {
                 "list": {"method": "GET", "path": "/backups"},
@@ -649,6 +827,13 @@ def versioned_player_events():
     events = get_player_events(after, limit)
     cursor = max((int(event["id"]) for event in events), default=after)
     return jsonify({"events": events, "cursor": cursor, "retention_days": 7})
+
+
+@app.get("/api/v1/player-stats")
+def versioned_player_stats():
+    if not authorized():
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    return jsonify(get_player_stats())
 
 
 @app.get("/backups")

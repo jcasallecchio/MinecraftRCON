@@ -58,6 +58,7 @@ A API aceita comandos nativos do Bedrock por HTTP e tem como base `http://IP_LOC
 | `GET /api/v1/info` | Mostra a versão da API, o dialeto de comandos e as operações disponíveis. |
 | `GET /api/v1/telemetry` | Retorna o estado e a versão do servidor, dados do mundo, jogadores, memória do processo e tempo de atividade. A amostra de jogadores é atualizada em segundo plano a cada 15 segundos e indica sua idade e se está desatualizada. |
 | `GET /api/v1/events?after=<id>&limit=<n>` | Retorna eventos de entrada, saída e morte dos jogadores. A API mantém até sete dias e 5.000 eventos. `after` busca eventos posteriores ao cursor e `limit` aceita de 1 a 200. |
+| `GET /api/v1/player-stats` | Retorna estatísticas acumuladas por jogador: tempo jogado, sessões, saídas, mortes, primeira atividade e última atividade. Os totais ficam em `/share/minecraftRCON/player_stats.json` sem expiração. |
 | `POST /api/v1/commands` | Envia um comando ao console. `POST /rcon` continua disponível para integrações existentes. |
 | `GET /backups` | Lista os backups disponíveis para restauração. |
 | `POST /backups` | Cria um backup do mundo sob demanda. |
@@ -77,6 +78,8 @@ Envie um comando por requisição, com até 1024 caracteres. A resposta inclui `
 Integrações podem usar `edition: "bedrock"` e `command_dialect: "minecraft-bedrock"` para identificar os comandos aceitos. A telemetria inclui `schema_version`, `collected_at`, `server`, `players` e `performance`. O log da API fica em `/share/minecraftRCON/rcon_commands.log` e é rotacionado a cada 2 MiB, com até cinco arquivos anteriores.
 
 O feed de jogadores é lido do log nativo do servidor. Ele armazena apenas entradas, saídas e mensagens de morte, sem registrar mensagens de chat. Os eventos são gravados em `/share/minecraftRCON/player_events.jsonl` e ficam disponíveis no MineDev Console por até sete dias, limitados aos 5.000 eventos mais recentes.
+
+As estatísticas são acumuladas a partir desses eventos e gravadas separadamente em `player_stats.json`, sem a retenção de sete dias do feed. Na primeira inicialização, o add-on aproveita eventos ainda presentes no feed para montar os totais iniciais. O tempo jogado é calculado entre os registros de entrada e saída, e a sessão atual aparece quando há uma amostra recente de jogadores online. Eventos mais antigos que a retenção do feed não podem ser recuperados para compor o histórico inicial.
 
 Use o [MineDev Console](https://github.com/jcasallecchio/MinecraftRCON/tree/main/console) se preferir administrar o servidor por um painel web. O guia do painel explica como configurar o mesmo token da API e usar os comandos, a telemetria e o histórico.
 

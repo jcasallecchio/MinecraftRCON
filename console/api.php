@@ -120,6 +120,15 @@ if ($action === 'events') {
     json_response($result['data']);
 }
 
+if ($action === 'player-stats') {
+    reject_method('GET');
+    $result = bedrock_request('/api/v1/player-stats');
+    if (!$result['ok']) {
+        bedrock_failure($result);
+    }
+    json_response($result['data']);
+}
+
 if ($action === 'command') {
     reject_method('POST');
     $payload = read_payload();

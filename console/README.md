@@ -1,12 +1,12 @@
 # MineDev Console
 
-Painel web do MinecraftRCON para administrar um servidor **Minecraft Bedrock Edition**. Mostra jogadores, mundo, versão, memória do processo e tempo de atividade. Permite acompanhar entradas, saídas e mortes no feed ao vivo geral ou filtrado por jogador, enviar comandos com sugestões, consultar o catálogo e exportar o histórico de auditoria. O painel funciona no computador e no celular.
+Painel web do MinecraftRCON para administrar um servidor **Minecraft Bedrock Edition**. Mostra jogadores, mundo, versão, memória do processo e tempo de atividade. Permite acompanhar entradas, saídas e mortes no feed ao vivo, consultar estatísticas acumuladas por jogador, enviar comandos com sugestões, consultar o catálogo e exportar o histórico de auditoria. O painel funciona no computador e no celular.
 
 O navegador acessa o painel pelo Apache. O PHP chama a API do add-on na rede de confiança, na porta `19133/TCP`, com o token configurado no servidor web.
 
 ## Requisitos
 
-- [Bedrock Server with RCON](../MinecraftRCON/DOCS.md) versão **1.6.0 ou posterior**, com a API v1 acessível a partir do servidor web.
+- [Bedrock Server with RCON](../MinecraftRCON/DOCS.md) versão **1.7.0 ou posterior**, com a API v1 acessível a partir do servidor web.
 - Apache 2.4 com PHP, `mod_rewrite` e suporte a `.htaccess` para a pasta do console. [Configuração de .htaccess no Apache](https://httpd.apache.org/docs/2.4/howto/htaccess.html)
 - PHP 8.2 ou mais recente, em uma versão que ainda receba correções de segurança. Habilite `curl` no PHP usado pelo Apache e tenha o PHP de linha de comando disponível para a configuração inicial. [Versões mantidas do PHP](https://www.php.net/supported-versions.php) · [Extensão cURL](https://www.php.net/manual/en/book.curl.php)
 
@@ -77,6 +77,7 @@ Para trocar o usuário ou a senha, execute `php tools/set-login.php`. Se o PHP l
 4. Em **Comandos & glossário**, pesquise comandos por nome, descrição ou categoria. Os comandos aceitos dependem da versão do Bedrock e das opções do mundo. [Referência de comandos do Bedrock](https://learn.microsoft.com/en-us/minecraft/creator/commands/commands?view=minecraft-bedrock-stable)
 5. Em **Histórico**, consulte os eventos mais recentes e use **Exportar CSV** para salvar o período disponível. **Limpar tela** limpa apenas o terminal. Os registros são salvos em `storage/`. Quando o painel é acessado, a limpeza periódica remove os eventos que passaram da retenção.
 6. Em **Feed ao vivo**, acompanhe entradas, saídas e mortes. O filtro permite ver todos os jogadores ou selecionar um jogador. O painel atualiza o feed automaticamente a cada cinco segundos; os eventos são mantidos pelo add-on por até sete dias.
+7. Em **Estatísticas**, compare tempo jogado, sessões, saídas, mortes e última atividade por jogador. Os totais são persistidos pelo add-on sem expiração e continuam acumulando entre reinicializações.
 
 A API confirma o envio ao console do Bedrock e pode retornar linhas recentes. Confira o efeito de um comando no jogo ou nos logs do add-on.
 

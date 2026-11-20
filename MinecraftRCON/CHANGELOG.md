@@ -1,5 +1,9 @@
 # Histórico de versões
 
+## 1.7.0
+- Adiciona estatísticas acumuladas por jogador: tempo jogado, sessões, saídas, mortes e última atividade.
+- Expõe os dados pela rota autenticada `/api/v1/player-stats` e adiciona a aba Estatísticas no MineDev Console.
+
 ## 1.6.0
 - Adiciona feed persistente de entrada, saída e morte de jogadores, com retenção de sete dias.
 - Publica os eventos pela API autenticada `/api/v1/events` e atualiza o MineDev Console automaticamente.

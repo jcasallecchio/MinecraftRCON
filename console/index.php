@@ -16,7 +16,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
   <meta name="csrf-token" content="<?= htmlspecialchars((string)$_SESSION['csrf'], ENT_QUOTES, 'UTF-8') ?>">
   <meta name="theme-color" content="#10140f">
   <title>MineDev Console</title>
-  <link rel="stylesheet" href="assets/app.css?v=12">
+  <link rel="stylesheet" href="assets/app.css?v=14">
 </head>
 <body class="<?= $isAuthenticated ? 'authenticated' : 'guest' ?>">
   <div class="ambient ambient-one"></div>
@@ -107,6 +107,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
         <nav class="tabs" aria-label="Seções do console">
           <button class="tab active" data-tab="console" type="button"><span>⌘</span> Console</button>
           <button class="tab" data-tab="activity" type="button"><span>◉</span> Feed ao vivo</button>
+          <button class="tab" data-tab="stats" type="button"><span>▤</span> Estatísticas</button>
           <button class="tab" data-tab="commands" type="button"><span>⌕</span> Comandos & glossário</button>
           <button class="tab" data-tab="history" type="button"><span>◷</span> Histórico <i><?= $LOG_RETENTION_DAYS ?>d</i></button>
         </nav>
@@ -136,6 +137,14 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
           <div class="activity-list" id="activityList" aria-live="polite" aria-label="Feed de atividade dos jogadores"></div>
         </section>
 
+        <section class="view" id="view-stats" data-view="stats">
+          <div class="section-intro"><div><div class="eyebrow">JOGADORES · ESTATÍSTICAS</div><h2>Desempenho por jogador</h2><p>Tempo de jogo, sessões, mortes e última atividade, acumulados pelo servidor.</p></div><span class="terminal-live"><span class="pulse"></span> ATUALIZAÇÃO AUTOMÁTICA</span></div>
+          <div class="stats-summary" id="statsSummary"></div>
+          <div class="stats-tools"><label class="search-box"><span>⌕</span><input id="statsSearch" type="search" placeholder="Filtrar jogador…" autocomplete="off"></label><button class="ghost-button" id="statsRefresh" type="button">Atualizar estatísticas ⟳</button><span class="activity-updated" id="statsUpdated">Aguardando dados…</span></div>
+          <div class="player-stats-grid" id="playerStatsList" aria-live="polite" aria-label="Estatísticas de jogadores"></div>
+          <div class="catalog-note"><span>ⓘ</span><span>Tempo de jogo é calculado entre os eventos de entrada e saída. O total continua salvo entre reinicializações; o feed de eventos mantém sua retenção separada.</span></div>
+        </section>
+
         <section class="view" id="view-commands" data-view="commands">
           <div class="section-intro"><div><div class="eyebrow">BEDROCK COMMAND REFERENCE</div><h2>Comandos e glossário</h2><p>Autocomplete para comandos documentados, com sintaxe rápida e termos úteis.</p></div><a class="text-link" href="https://learn.microsoft.com/en-us/minecraft/creator/commands/commands?view=minecraft-bedrock-stable" target="_blank" rel="noreferrer">Referência oficial ↗</a></div>
           <div class="catalog-tools"><label class="search-box"><span>⌕</span><input id="catalogSearch" type="search" placeholder="Buscar comando ou descrição…" autocomplete="off"></label><div class="category-filters" id="categoryFilters"></div></div>
@@ -157,6 +166,6 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
     </div>
   </div>
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
-  <script src="assets/app.js?v=8" defer></script>
+  <script src="assets/app.js?v=10" defer></script>
 </body>
 </html>

@@ -14,8 +14,8 @@
 
 - **Servidor Bedrock com NetherNet.** Jogue na rede local ou configure o roteador para receber jogadores pela internet.
 - **Atualização na inicialização.** O add-on consulta a versão oficial do Bedrock e mantém a instalação existente se uma falha de download impedir a atualização.
-- **Comandos, telemetria e feed de jogadores.** A API HTTP permite enviar comandos ao console, consultar versão, jogadores, memória e tempo de atividade e acompanhar entradas, saídas e mortes.
-- **MineDev Console.** Painel web opcional para consultar a telemetria, acompanhar a atividade geral ou por jogador, enviar comandos com sugestões e exportar a auditoria.
+- **Comandos, telemetria e dados de jogadores.** A API HTTP permite enviar comandos ao console, consultar versão, jogadores, memória e tempo de atividade, acompanhar entradas, saídas e mortes e consultar estatísticas acumuladas por jogador.
+- **MineDev Console.** Painel web opcional para consultar a telemetria, acompanhar a atividade e comparar tempo de jogo, sessões e mortes, enviar comandos com sugestões e exportar a auditoria.
 - **Backups do mundo.** Crie cópias programadas ou sob demanda, com retenção configurável e restauração autenticada.
 
 ## Instalação rápida

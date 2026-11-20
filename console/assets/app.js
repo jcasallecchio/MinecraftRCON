@@ -14,6 +14,8 @@
   let activityRecords = [];
   let activityCursor = 0;
   let activityLoading = false;
+  let playerStats = [];
+  let statsLoading = false;
   let commandHistory = [];
   let historyPointer = 0;
   let selectedSuggestion = -1;
@@ -131,10 +133,11 @@
   function switchTab(name) {
     $$('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === name));
     $$('.view').forEach(view => view.classList.toggle('active', view.dataset.view === name));
-    const titles = { console: 'Visão geral', activity: 'Feed ao vivo', commands: 'Referência', history: 'Histórico' };
+    const titles = { console: 'Visão geral', activity: 'Feed ao vivo', stats: 'Estatísticas', commands: 'Referência', history: 'Histórico' };
     $('#pageTitle').textContent = titles[name] || 'Visão geral';
     if (name === 'history' && historyRecords.length === 0) loadHistory(true);
     if (name === 'activity') loadPlayerEvents(activityRecords.length === 0);
+    if (name === 'stats') loadPlayerStats();
     if (name === 'console') $('#commandInput').focus();
   }
   $$('.tab').forEach(tab => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
@@ -567,11 +570,84 @@
   $('#activityPlayer')?.addEventListener('change', renderPlayerEvents);
   $('#activityRefresh')?.addEventListener('click', () => loadPlayerEvents(activityRecords.length === 0));
 
+  function formatDuration(seconds) {
+    const value = Math.max(0, Number(seconds) || 0);
+    const days = Math.floor(value / 86400);
+    const hours = Math.floor((value % 86400) / 3600);
+    const minutes = Math.floor((value % 3600) / 60);
+    return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+  }
+
+  function formatPlayerDate(value) {
+    if (!value) return 'Sem registro';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 'Sem registro' : date.toLocaleString('pt-BR');
+  }
+
+  function renderPlayerStats() {
+    const online = playerStats.filter(player => player.online).length;
+    const deaths = playerStats.reduce((sum, player) => sum + Number(player.death_count || 0), 0);
+    const playtime = playerStats.reduce((sum, player) => sum + Number(player.playtime_seconds || 0), 0);
+    const summary = $('#statsSummary'); summary.replaceChildren();
+    [["JOGADORES", String(playerStats.length)], ["ONLINE AGORA", String(online)], ["TEMPO JOGADO", formatDuration(playtime)], ["MORTES", String(deaths)]].forEach(([label, value]) => {
+      const card = document.createElement('article'); card.className = 'stats-summary-card';
+      const heading = document.createElement('span'); heading.textContent = label;
+      const metric = document.createElement('strong'); metric.textContent = value;
+      card.append(heading, metric); summary.append(card);
+    });
+
+    const query = ($('#statsSearch')?.value || '').trim().toLocaleLowerCase();
+    const list = $('#playerStatsList'); list.replaceChildren();
+    const players = playerStats.filter(player => player.name.toLocaleLowerCase().includes(query));
+    if (!players.length) {
+      const empty = document.createElement('div'); empty.className = 'empty-state';
+      empty.textContent = playerStats.length ? 'Nenhum jogador corresponde à busca.' : 'As estatísticas serão preenchidas conforme os jogadores entrarem, saírem e jogarem.';
+      list.append(empty); return;
+    }
+    players.forEach(player => {
+      const card = document.createElement('article'); card.className = 'player-stat-card';
+      const head = document.createElement('div'); head.className = 'player-stat-head';
+      const name = document.createElement('strong'); name.className = 'player-stat-name'; name.textContent = player.name;
+      const status = document.createElement('span'); status.className = `player-stat-status ${player.online ? 'online' : ''}`; status.textContent = player.online ? 'ONLINE' : 'OFFLINE';
+      head.append(name, status);
+      const metrics = document.createElement('div'); metrics.className = 'player-stat-metrics';
+      [["Tempo jogado", formatDuration(player.playtime_seconds)], ["Sessões", String(player.join_count)], ["Mortes", String(player.death_count)], ["Saídas", String(player.leave_count)]].forEach(([label, value]) => {
+        const item = document.createElement('div'); item.className = 'player-stat-metric';
+        const caption = document.createElement('span'); caption.textContent = label;
+        const amount = document.createElement('strong'); amount.textContent = value;
+        item.append(caption, amount); metrics.append(item);
+      });
+      const lastSeen = document.createElement('div'); lastSeen.className = 'player-stat-last-seen';
+      lastSeen.textContent = `Última atividade · ${formatPlayerDate(player.last_seen)}`;
+      if (player.online && player.current_session_seconds > 0) lastSeen.textContent += ` · sessão atual ${formatDuration(player.current_session_seconds)}`;
+      card.append(head, metrics, lastSeen); list.append(card);
+    });
+  }
+
+  async function loadPlayerStats() {
+    if (statsLoading) return;
+    statsLoading = true;
+    try {
+      const payload = await api('player-stats');
+      playerStats = Array.isArray(payload.players) ? payload.players : [];
+      $('#statsUpdated').textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
+      renderPlayerStats();
+    } catch (error) {
+      if (error.status !== 401) $('#statsUpdated').textContent = `Falha ao atualizar: ${error.message}`;
+      if (error.status === 401) window.location.reload();
+    } finally { statsLoading = false; }
+  }
+  $('#statsSearch')?.addEventListener('input', renderPlayerStats);
+  $('#statsRefresh')?.addEventListener('click', loadPlayerStats);
+
   async function initializeConsole() {
     await Promise.all([loadCatalog(), refreshStatus(), loadHistory(true)]);
     if (pollTimer) window.clearInterval(pollTimer);
     if (activityPollTimer) window.clearInterval(activityPollTimer);
-    pollTimer = window.setInterval(() => refreshStatus(false), 15000);
+    pollTimer = window.setInterval(() => {
+      refreshStatus(false);
+      if ($('#view-stats')?.classList.contains('active')) loadPlayerStats();
+    }, 15000);
     activityPollTimer = window.setInterval(() => {
       if ($('#view-activity')?.classList.contains('active')) loadPlayerEvents(activityRecords.length === 0);
     }, 5000);
